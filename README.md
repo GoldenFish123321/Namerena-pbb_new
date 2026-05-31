@@ -141,10 +141,10 @@ test-🙈🐛🐊🐍@test 5021 5003
 
 | 平台 | 入口 | 说明 |
 |------|------|------|
-| Linux x86_64 | `./run.sh` | AVX2 自动检测, g++ -O3 |
-| Linux ARM | `./run.sh` | 标量回退 |
+| Linux x86_64 | `./run.sh` | icpx (Intel) 优先, g++ 回退 |
+| Linux ARM | `./run.sh` | g++ 标量回退 |
 | Termux (Android) | `./run.sh` | 自动 pkg install python/clang |
-| Windows | `run.bat` | MSVC cl.exe 优先, MinGW g++ 回退 |
+| Windows | `run.bat` | icpx > g++ > MSVC cl |
 
 ## 架构
 
@@ -164,7 +164,7 @@ Python 负责配置和编排，C++ 负责全部算法。子进程隔离消除 Py
 
 ```
 ├── run.sh / run.bat          # 入口 (建 .venv + 装依赖)
-├── build.py                  # 环境检测 + 全部 C++ 编译
+├── build.py                  # 环境检测 + C++ 编译 (icpx/g++/MSVC)
 ├── main.py                   # 配置解析 + 字符集构建 + 运行
 ├── engine_main.cpp           # C++ 引擎入口
 ├── config.example.json       # JSON 配置示例
