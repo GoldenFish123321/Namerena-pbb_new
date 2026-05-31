@@ -15,7 +15,7 @@ PBB 名字评分测号器 — Python 编排层.
   python3 main.py -c config.yaml           # 直接调用
   python3 main.py                           # 自动查找 config.json/yaml/toml
 """
-import json, os, sys, time, random, argparse, subprocess, glob
+import json, os, sys, time, random, argparse, subprocess, shutil, glob
 
 REQUIRED_PY = (3, 8)                                                    # 最低 Python 版本
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))                   # 项目根目录
