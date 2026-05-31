@@ -25,3 +25,8 @@ Thumbs.db
 # Temp
 tmp_*
 *.tmp
+
+#config
+config.json
+config.yaml
+config.toml
