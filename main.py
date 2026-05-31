@@ -160,7 +160,19 @@ def main():
     parser = argparse.ArgumentParser(description="PBB 名字评分测号器")
     parser.add_argument("-c", "--config", default=None,
                         help="配置文件路径 (默认依次尝试 config.json/yaml/toml)")
-    parser.add_argument("--threads", type=int, help="覆盖线程数, -1=自动")
+    parser.add_argument("--threads", type=int, help="覆盖: threads.worker_threads (-1=自动)")
+    parser.add_argument("--team", help="覆盖: team_name")
+    parser.add_argument("--mode", type=int, help="覆盖: enumeration.mode (1=顺序 2/3/4=随机)")
+    parser.add_argument("--vlen", type=int, help="覆盖: enumeration.variable_length")
+    parser.add_argument("--range-start", type=int, help="覆盖: enumeration.ranges[0].start")
+    parser.add_argument("--range-end", type=int, help="覆盖: enumeration.ranges[0].end")
+    parser.add_argument("--xp-min", type=int, help="覆盖: collection.xp_min")
+    parser.add_argument("--xd-min", type=int, help="覆盖: collection.xd_min")
+    parser.add_argument("--collect-mode", type=int, choices=[0,1,2], help="覆盖: collection.collect_mode")
+    parser.add_argument("--output-xp", type=int, choices=[0,1], help="覆盖: output.output_xp")
+    parser.add_argument("--scl", type=int, choices=[1,2,3,4], help="覆盖: character_set.single_char_length")
+    parser.add_argument("--types", help="覆盖: character_set.types (逗号分隔, 如 1,2,3)")
+    parser.add_argument("--custom-values", help="覆盖: character_set.custom_values (字符串)")
     args = parser.parse_args()
 
     # 自动查找配置 or 验证用户指定路径
@@ -202,6 +214,22 @@ def main():
     if config["threads"]["worker_threads"] == -1:
         config["threads"]["worker_threads"] = os.cpu_count() or 4
         print(f"[main] Auto threads: {config['threads']['worker_threads']}", file=sys.stderr)
+
+    # 命令行覆盖配置 (--xxx 直接覆写 config 对应字段)
+    if args.team:   config["team_name"] = args.team
+    if args.mode is not None: config["enumeration"]["mode"] = args.mode
+    if args.vlen is not None: config["enumeration"]["variable_length"] = args.vlen
+    if args.range_start is not None: config["enumeration"]["ranges"][0]["start"] = args.range_start
+    if args.range_end is not None:   config["enumeration"]["ranges"][0]["end"] = args.range_end
+    if args.xp_min is not None: config["collection"]["xp_min"] = args.xp_min
+    if args.xd_min is not None: config["collection"]["xd_min"] = args.xd_min
+    if args.collect_mode is not None: config["collection"]["collect_mode"] = args.collect_mode
+    if args.output_xp is not None: config["output"]["output_xp"] = args.output_xp
+    if args.scl is not None: config["character_set"]["single_char_length"] = args.scl
+    if args.types is not None:
+        config["character_set"]["types"] = [int(x.strip()) for x in args.types.split(",")]
+    if args.custom_values is not None:
+        config["character_set"]["custom_values"] = args.custom_values
 
     # ── 3. 构建字符集 ──
     # 从配置中读取字符集类型, 通过 pbb_core API 组装为字节流.
