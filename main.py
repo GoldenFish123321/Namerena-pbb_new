@@ -126,10 +126,10 @@ def build_engine():
     if sys.platform == "win32":
         # Windows: 优先 MSVC, 回退 MinGW g++
         if shutil.which("cl"):
-            flags = ["/std:c++17", "/O2", "/EHsc"]
+            flags = ["/std:c++17", "/Ox", "/EHsc"]          # /Ox = MSVC 全优化 = g++ -O3
             cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
         elif shutil.which("g++"):
-            flags = ["-std=c++17", "-O2"]
+            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
         else:
             print("ERROR: 未找到 C++ 编译器. 请安装 Visual Studio Build Tools 或 MinGW.",
