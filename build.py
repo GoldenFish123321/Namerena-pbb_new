@@ -53,13 +53,47 @@ def ensure_pbb_core(rebuild=False):
     rebuild=True:  强制重编.
     """
     so_pattern = os.path.join(BASE_DIR, "pbb_core.cpython-*.so")
+    # Windows: .pyd 格式
+    if sys.platform == "win32" and not glob.glob(so_pattern):
+        so_pattern = os.path.join(BASE_DIR, "pbb_core*.pyd")
     need = rebuild or not glob.glob(so_pattern)
     if not need:
         return
+    
+    from pybind11.setup_helpers import Pybind11Extension, build_ext
+    from setuptools import setup
+
+    # 编译旗标 (复用 _compile_flags)
+    extra_flags = _compile_flags()
+    
     print("[build] Building pbb_core...", file=sys.stderr)
-    subprocess.check_call(
-        [sys.executable, os.path.join(BASE_DIR, "setup.py"), "build_ext", "--inplace"],
-        stdout=subprocess.DEVNULL)
+    ext = Pybind11Extension(
+        "pbb_core",
+        [os.path.join(BASE_DIR, "src", "bridge.cpp")],
+        cxx_std=17,
+        include_dirs=[os.path.join(BASE_DIR, "src")],
+        extra_compile_args=extra_flags,
+        extra_link_args=[],
+    )
+    setup(
+        name="pbb_core",
+        version="1.0.0",
+        description="PBB Name Scoring Core",
+        ext_modules=[ext],
+        cmdclass={"build_ext": build_ext},
+        script_args=["build_ext", "--inplace"],
+    )
+
+
+def _compile_flags():
+    """返回当前平台的编译旗标 (pybind11 和 standalone 引擎共用)."""
+    if sys.platform == "win32":
+        return ["/std:c++17", "/Ox"]
+    flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
+             "-fno-plt", "-fno-semantic-interposition"]
+    if _detect_avx2():
+        flags.extend(["-mavx2", "-mfma"])
+    return flags
 
 
 # ═══════════════════════════════════════════════════════════════
