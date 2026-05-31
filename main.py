@@ -3,141 +3,21 @@
 PBB 名字评分测号器 — Python 编排层.
 
 职责:
-  1. 环境检测 + 自动安装依赖 (pyyaml/pybind11/setuptools/tomli)
-  2. 自动编译 C++ 引擎 (engine_main.cpp → pbb_engine) 和 pybind11 桥接模块
-  3. 解析配置文件 (JSON/YAML/TOML 三格式)
-  4. 构建字符集 → stdin 管道传参 → 启动 C++ 子进程
-  5. 实时读取引擎进度 → 统计最终结果
+  1. 解析配置文件 (JSON/YAML/TOML 三格式)
+  2. 构建字符集 → stdin 管道传参 → 启动 C++ 子进程
+  3. 实时读取引擎进度 → 统计最终结果
 
 用法:
-  ./run.sh -c config.yaml --threads -1     # Linux/Termux
-  run.bat -c config.yaml                   # Windows
-  python3 main.py -c config.yaml           # 直接调用
-  python3 main.py                           # 自动查找 config.json/yaml/toml
+  ./run.sh -c config.yaml --threads 8    # Linux/Termux
+  run.bat -c config.yaml                 # Windows
+  python3 main.py -c config.yaml         # 直接调用
+  python3 main.py                         # 自动查找 config.json/yaml/toml
 """
-import json, os, sys, time, random, argparse, subprocess, shutil, glob
+import json, os, sys, time, random, argparse, subprocess
 
-REQUIRED_PY = (3, 8)                                                    # 最低 Python 版本
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))                   # 项目根目录
+from build import ensure_all          # 编译模块: 环境检测 + C++ 编译
 
-
-# ═══════════════════════════════════════════════════════════════
-# 依赖检查 (依赖由 run.sh / run.bat 自动安装到 .venv)
-# ═══════════════════════════════════════════════════════════════
-
-def check_python():
-    """检查 Python 版本 >= 3.8."""
-    if sys.version_info < REQUIRED_PY:
-        print(f"ERROR: Python {REQUIRED_PY[0]}.{REQUIRED_PY[1]}+ required", file=sys.stderr)
-        sys.exit(1)
-
-
-def check_deps():
-    """检查 Python 依赖是否已安装 (由 run.sh/run.bat 负责安装).
-    
-    如果直接运行 main.py 发现缺失, 提示用 run.sh/run.bat 启动.
-    """
-    missing = []
-    try: import yaml
-    except ImportError: missing.append("pyyaml")
-    try: import setuptools
-    except ImportError: missing.append("setuptools")
-    try: import pybind11
-    except ImportError: missing.append("pybind11")
-    if sys.version_info < (3, 11):
-        try: import tomli
-        except ImportError: missing.append("tomli")
-    if missing:
-        print(f"ERROR: 缺少依赖: {', '.join(missing)}", file=sys.stderr)
-        print("  请用 run.sh 或 run.bat 启动 (自动创建虚拟环境并安装依赖)", file=sys.stderr)
-        sys.exit(1)
-
-
-# ═══════════════════════════════════════════════════════════════
-# 编译: pybind11 桥接模块 + C++ 引擎
-# ═══════════════════════════════════════════════════════════════
-
-def ensure_pbb_core():
-    """编译 pybind11 模块 (pbb_core*.so / .pyd), 提供字符集数据 + 评分函数.
-    
-    只在 .so 文件不存在时编译, 增量构建.
-    """
-    so_pattern = os.path.join(BASE_DIR, "pbb_core.cpython-*.so")
-    if not glob.glob(so_pattern):
-        print("[main] Building pbb_core...", file=sys.stderr)
-        subprocess.check_call(
-            [sys.executable, os.path.join(BASE_DIR, "setup.py"), "build_ext", "--inplace"],
-            stdout=subprocess.DEVNULL)
-
-
-def detect_avx2():
-    """检测 CPU 是否支持 AVX2 指令集 (仅 Linux, 读 /proc/cpuinfo)."""
-    try:
-        with open("/proc/cpuinfo") as f:
-            return "avx2" in f.read().lower()
-    except FileNotFoundError:
-        return False
-
-
-def build_engine():
-    """编译 C++ 引擎 (engine_main.cpp → pbb_engine).
-    
-    编译策略 (按平台/编译器):
-      Linux x86_64  — g++ -O3 -mavx2 -mfma
-      Linux ARM     — g++ -O3 (无 SIMD)
-      Windows MSVC  — cl /O2 (自动检测)
-      Windows MinGW — g++ -O2 (回退)
-    
-    增量编译: 只在源码比二进制新时重编.
-    """
-    bin_path = os.path.join(BASE_DIR, "pbb_engine")
-    if sys.platform == "win32":
-        bin_path += ".exe"          # Windows 可执行文件扩展名
-    src_dir = os.path.join(BASE_DIR, "src")
-    main_cpp = os.path.join(BASE_DIR, "engine_main.cpp")
-
-    # 检查是否需要重编: 二进制不存在 或 任何源文件更新
-    need = not os.path.exists(bin_path)
-    if not need:
-        bin_time = os.path.getmtime(bin_path)
-        all_src = [main_cpp] + [
-            os.path.join(src_dir, f) for f in os.listdir(src_dir)
-            if f.endswith((".hpp", ".cpp"))
-        ]
-        for f in all_src:
-            if os.path.getmtime(f) > bin_time:
-                need = True
-                break
-    if not need:
-        return bin_path
-
-    # 编译旗标 + 编译器选择
-    if sys.platform == "win32":
-        # Windows: 优先 MSVC, 回退 MinGW g++
-        if shutil.which("cl"):
-            flags = ["/std:c++17", "/Ox", "/EHsc"]          # /Ox = MSVC 全优化 = g++ -O3
-            cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
-        elif shutil.which("g++"):
-            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-            cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
-        else:
-            print("ERROR: 未找到 C++ 编译器. 请安装 Visual Studio Build Tools 或 MinGW.",
-                  file=sys.stderr)
-            sys.exit(1)
-    else:
-        # Linux / Termux: g++ (或 clang++)
-        flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        if detect_avx2():
-            flags.extend(["-mavx2", "-mfma"])
-            print("[main] AVX2 detected", file=sys.stderr)
-        cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
-
-    print(f"[main] Compiling: {' '.join(cmd)}", file=sys.stderr)
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if r.returncode != 0:
-        print(f"[main] Build FAILED:\n{r.stderr}", file=sys.stderr)
-        sys.exit(1)
-    return bin_path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -145,21 +25,11 @@ def build_engine():
 # ═══════════════════════════════════════════════════════════════
 
 def main():
-    # ── 1. 环境准备 ──
-    check_python()
-    check_deps()
-    os.chdir(BASE_DIR)                     # 切换工作目录到项目根
-    ensure_pbb_core()                      # pybind11 桥接模块
-    import pbb_core                        # 导入字符集/评分 API
-    engine_bin = build_engine()            # C++ 引擎
-
-    # ── 2. 解析配置文件 ──
-    try: import yaml; HAS_YAML = True
-    except ImportError: HAS_YAML = False
-
+    # ── 1. 解析命令行 ──
     parser = argparse.ArgumentParser(description="PBB 名字评分测号器")
     parser.add_argument("-c", "--config", default=None,
                         help="配置文件路径 (默认依次尝试 config.json/yaml/toml)")
+    parser.add_argument("--rebuild", action="store_true", help="强制重编 C++ 引擎")
     parser.add_argument("--threads", type=int, help="覆盖: threads.worker_threads (-1=自动)")
     parser.add_argument("--team", help="覆盖: team_name")
     parser.add_argument("--mode", type=int, help="覆盖: enumeration.mode (1=顺序 2/3/4=随机)")
@@ -174,6 +44,14 @@ def main():
     parser.add_argument("--types", help="覆盖: character_set.types (逗号分隔, 如 1,2,3)")
     parser.add_argument("--custom-values", help="覆盖: character_set.custom_values (字符串)")
     args = parser.parse_args()
+
+    # ── 2. 环境准备 ──
+    engine_bin = ensure_all(rebuild=args.rebuild)
+    import pbb_core
+
+    # ── 3. 解析配置文件 ──
+    try: import yaml; HAS_YAML = True
+    except ImportError: HAS_YAML = False
 
     # 自动查找配置 or 验证用户指定路径
     config_path = args.config
@@ -231,19 +109,19 @@ def main():
     if args.custom_values is not None:
         config["character_set"]["custom_values"] = args.custom_values
 
-    # ── 3. 构建字符集 ──
+    # ── 4. 构建字符集 ──
     # 从配置中读取字符集类型, 通过 pbb_core API 组装为字节流.
     # 字节流以 hex 编码后通过 stdin 传给 C++ 引擎.
 
     def _custom_bytes(values):
-        """解析 custom_values: 字符串 '🐒🐵' → UTF-8 编码, 数字列表 [240,159,...] → 字节数组 (兼容旧格式)."""
+        """解析 custom_values: 字符串 → UTF-8 编码, 数字列表 → 字节数组 (兼容旧格式)."""
         if isinstance(values, str):
             return values.encode("utf-8")
         return bytes([int(x) & 0xFF for x in values])
 
     pbb_core.init_exhanzi()
     cs = config["character_set"]
-    scl = cs["single_char_length"]          # 单字符字节数 (1/2/3/4)
+    scl = cs["single_char_length"]
     buf = bytearray()
 
     for t in cs["types"]:
@@ -295,16 +173,14 @@ def main():
                         buf.extend(pbb_core.encode_unicode(cp))
 
     charset_bytes = bytes(buf)
-    charset_len = len(charset_bytes) // scl if scl else 0                # 字符总数
+    charset_len = len(charset_bytes) // scl if scl else 0
 
-    # ── 4. 组装引擎参数 ──
-    # 前缀/后缀: '+' 表示空字符串
+    # ── 5. 组装引擎参数 ──
     prefixes = [p["name"] for p in config["prefixes"]]
     suffixes = [s["name"] for s in config["suffixes"]]
     prefixes = ["" if x == "+" else x for x in prefixes]
     suffixes = ["" if x == "+" else x for x in suffixes]
 
-    # 输出文件名: '+' = 随机数字, '-' = 时间戳, 其他 = 自定义
     result_file = config["output"]["result_file"]
     if result_file == "+":
         result_file = f"out-{''.join(str(random.randint(0, 9)) for _ in range(7))}.txt"
@@ -316,8 +192,6 @@ def main():
     out_cfg = config["output"]
     ranges = en.get("ranges", [{}])[0]
 
-    # 构建 key=value 文本, 通过 stdin 管道传给 C++ 引擎
-    # charset_bytes 以 hex 编码 (避免二进制字符破坏管道)
     params = (
         f"team_name={config['team_name']}\n"
         f"n_threads={config['threads']['worker_threads']}\n"
@@ -332,7 +206,6 @@ def main():
         f"output_speed={out_cfg.get('speed_output', 1)}\n"
         f"result_file={result_file}\n"
     )
-    # collect_mode=2: 自定义阈值 (对齐原版 special_thresholds)
     if cl.get('collect_mode', 0) == 2:
         st = cl.get('special_thresholds', {})
         eight_v = cl.get('eight_v_min', 0)
@@ -346,7 +219,7 @@ def main():
     os.makedirs("out", exist_ok=True)
     print(f"[main] Threads: {config['threads']['worker_threads']}, Mode: {en['mode']}", file=sys.stderr)
 
-    # ── 5. 启动 C++ 引擎 (实时读取进度) ──
+    # ── 6. 启动 C++ 引擎 (实时读取进度) ──
     t0 = time.time()
     proc = subprocess.Popen(
         [engine_bin],
@@ -358,7 +231,6 @@ def main():
     proc.stdin.write(params)
     proc.stdin.close()
 
-    # 逐行转发引擎的 stderr 输出 (进度 / 速度 / 结果计数)
     for line in proc.stderr:
         line = line.strip()
         if line:
@@ -370,10 +242,7 @@ def main():
         print(f"[main] Engine failed ({proc.returncode})", file=sys.stderr)
         sys.exit(1)
 
-    # ── 6. 统计结果 ──
-    # 引擎将结果写到 out/<result_file>, 每行格式:
-    #   <名字>@<队伍名> <XP> <XD>   (output_xp=1)
-    #   <名字>@<队伍名>              (output_xp=0)
+    # ── 7. 统计结果 ──
     out_path = os.path.join("out", result_file)
     count, mxp, mxd = 0, 0, 0
     if os.path.exists(out_path):
