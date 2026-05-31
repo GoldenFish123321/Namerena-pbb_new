@@ -1,0 +1,27 @@
+# Build artifacts
+pbb_engine
+pbb_core*.so
+pbb_core*.pyd
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Output
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp_*
+*.tmp
