@@ -3,21 +3,19 @@ from setuptools import setup
 import sys
 import os
 
-# Detect AVX2 support
-has_avx2 = os.path.exists('/proc/cpuinfo') and 'avx2' in open('/proc/cpuinfo').read().lower()
-
-extra_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
-               "-fno-plt", "-fno-semantic-interposition"]
-if has_avx2:
-    extra_flags.extend(["-mavx2", "-mfma"])
-    print("[setup] AVX2 detected — enabling SIMD optimizations")
-else:
-    print("[setup] AVX2 not detected — using scalar fallback")
-
-# Windows-specific
+# 编译旗标: Windows MSVC vs Linux GCC/Clang
 if sys.platform == "win32":
-    extra_flags.append("/std:c++17")
-    extra_flags.append("/O2")
+    extra_flags = ["/std:c++17", "/O2"]
+    print("[setup] Windows MSVC build")
+else:
+    has_avx2 = os.path.exists('/proc/cpuinfo') and 'avx2' in open('/proc/cpuinfo').read().lower()
+    extra_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
+                   "-fno-plt", "-fno-semantic-interposition"]
+    if has_avx2:
+        extra_flags.extend(["-mavx2", "-mfma"])
+        print("[setup] AVX2 detected — enabling SIMD optimizations")
+    else:
+        print("[setup] AVX2 not detected — using scalar fallback")
 
 ext_modules = [
     Pybind11Extension(
