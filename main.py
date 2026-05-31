@@ -297,6 +297,16 @@ def main():
         f"output_speed={out_cfg.get('speed_output', 1)}\n"
         f"result_file={result_file}\n"
     )
+    # collect_mode=2: 自定义阈值 (对齐原版 special_thresholds)
+    if cl.get('collect_mode', 0) == 2:
+        st = cl.get('special_thresholds', {})
+        eight_v = cl.get('eight_v_min', 0)
+        params += (
+            f"c_eight_v_min={st.get('eight_v_min', eight_v)}\n"
+            f"c_seven_v_min={st.get('seven_v_min', eight_v)}\n"
+            f"c_hl_min={st.get('hl_min', eight_v)}\n"
+            f"c_hp398_min={st.get('hp398_eight_v_min', eight_v)}\n"
+        )
 
     os.makedirs("out", exist_ok=True)
     print(f"[main] Threads: {config['threads']['worker_threads']}, Mode: {en['mode']}", file=sys.stderr)

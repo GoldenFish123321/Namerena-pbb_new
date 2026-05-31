@@ -64,7 +64,13 @@ inline int engine_main(int argc,char**argv){
     int mode=std::stoi(kv["mode"]),vlen=std::stoi(kv["variable_len"]);
     uint64_t rL=std::stoull(kv["range_L"]),rR=std::stoull(kv["range_R"]);
     int xpm=std::stoi(kv["xp_min"]),xdm=std::stoi(kv["xd_min"]);
-    int collect_mode=kv.count("collect_mode")?std::stoi(kv["collect_mode"]):0;
+    int collect_mode=kv.count("collect_mode")?std::stoi(kv["collect_mode"]):0;  // 0=否, 1=硬编码阈值, 2=自定义阈值
+    // collect_mode=2: 自定义阈值 (对齐原版 special_thresholds)
+    int c_8v=0,c_7v=0,c_hl=0,c_hp=0;
+    if(collect_mode==2){
+        c_8v=std::stoi(kv["c_eight_v_min"]);c_7v=std::stoi(kv["c_seven_v_min"]);
+        c_hl=std::stoi(kv["c_hl_min"]);c_hp=std::stoi(kv["c_hp398_min"]);
+    }
     int output_xp=kv.count("output_xp")?std::stoi(kv["output_xp"]):1;
     int output_log=kv.count("output_log")?std::stoi(kv["output_log"]):1;
     int output_speed=kv.count("output_speed")?std::stoi(kv["output_speed"]):1;
@@ -72,7 +78,7 @@ inline int engine_main(int argc,char**argv){
     // 打开输出文件
     std::string out_path="out/"+kv["result_file"];
     FILE*fp=fopen(out_path.c_str(),"a");if(!fp)return 1;
-    FILE*fp_blue=nullptr;if(collect_mode==1)fp_blue=fopen("out/blue.txt","a");
+    FILE*fp_blue=nullptr;if(collect_mode>=1)fp_blue=fopen("out/blue.txt","a");  // mode 1/2 均收集
     FILE*flog=output_log?stderr:fopen("out/task_log.txt","a");
     FILE*fspeed=output_speed?stderr:fopen("out/speed_log.txt","a");
 
@@ -147,8 +153,10 @@ inline int engine_main(int argc,char**argv){
                     if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
                         if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
                         else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
-                    if(collect_mode==1&&fp_blue){int sum=r.sum,prop7=r.props[7],hl=*std::min_element(r.props,r.props+7);
-                        if(sum>=777||(sum*3-prop7)>=2000||(prop7==398&&sum>=741)||(hl>=93)){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
+                    if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
+                        if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
+                        else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
+                        if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
                 }
             }else{
                 for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);now/=clen;}
@@ -161,8 +169,10 @@ inline int engine_main(int argc,char**argv){
                     if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
                         if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
                         else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
-                    if(collect_mode==1&&fp_blue){int sum=r.sum,prop7=r.props[7],hl=*std::min_element(r.props,r.props+7);
-                        if(sum>=777||(sum*3-prop7)>=2000||(prop7==398&&sum>=741)||(hl>=93)){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
+                    if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
+                        if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
+                        else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
+                        if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
                 }
             }
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====
