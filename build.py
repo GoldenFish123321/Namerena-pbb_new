@@ -88,6 +88,9 @@ def ensure_pbb_core(rebuild=False):
 def _compile_flags():
     """返回当前平台的编译旗标 (pybind11 和 standalone 引擎共用)."""
     if sys.platform == "win32":
+        # Windows: MSVC cl 用 /Ox, icpx/g++ 用 -O3
+        if shutil.which("icpx") or shutil.which("g++"):
+            return ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         return ["/std:c++17", "/Ox"]
     flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
              "-fno-plt", "-fno-semantic-interposition"]
@@ -142,24 +145,30 @@ def build_engine(rebuild=False):
     if not need:
         return bin_path
 
-    # 编译器 + 旗标选择
-    if sys.platform == "win32":
-        if shutil.which("cl"):
-            flags = ["/std:c++17", "/Ox", "/EHsc"]
-            cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
-        elif shutil.which("g++"):
-            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-            cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
+    # 编译器 + 旗标选择 (优先级: icpx > g++ > MSVC cl)
+    if shutil.which("icpx"):
+        # Intel oneAPI DPC++/C++ Compiler (最佳性能)
+        flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                 "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
+        if sys.platform == "win32":
+            flags.extend(["-xCORE-AVX2", "-qopenmp"])
         else:
-            print("ERROR: 未找到 C++ 编译器. 请安装 Visual Studio Build Tools 或 MinGW.",
-                  file=sys.stderr)
-            sys.exit(1)
-    else:
+            flags.extend(["-xHost", "-finline-functions", "-lpthread"])
+        cmd = ["icpx"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
+    elif shutil.which("g++"):
+        # GNU g++ (通用回退)
         flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         if _detect_avx2():
             flags.extend(["-mavx2", "-mfma"])
-            print("[build] AVX2 detected", file=sys.stderr)
         cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
+    elif sys.platform == "win32" and shutil.which("cl"):
+        # MSVC (Windows 专有)
+        flags = ["/std:c++17", "/Ox", "/EHsc"]
+        cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
+    else:
+        print("ERROR: 未找到 C++ 编译器 (icpx / g++ / MSVC cl).", file=sys.stderr)
+        print("  安装 Intel oneAPI: https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html", file=sys.stderr)
+        sys.exit(1)
 
     print(f"[build] Compiling: {' '.join(cmd)}", file=sys.stderr)
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
