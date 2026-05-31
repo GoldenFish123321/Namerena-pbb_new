@@ -164,9 +164,9 @@ Python 负责配置和编排，C++ 负责全部算法。子进程隔离消除 Py
 
 ```
 ├── run.sh / run.bat          # 入口 (建 .venv + 装依赖)
-├── main.py                   # Python 编排层
+├── build.py                  # 环境检测 + 全部 C++ 编译
+├── main.py                   # 配置解析 + 字符集构建 + 运行
 ├── engine_main.cpp           # C++ 引擎入口
-├── setup.py                  # pybind11 模块构建
 ├── config.example.json       # JSON 配置示例
 ├── config.example.yaml       # YAML 配置示例
 ├── config.example.toml       # TOML 配置示例
