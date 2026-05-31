@@ -1,34 +1,34 @@
 # PBB 名字评分测号器 — 配置文件
 # 格式: YAML (也支持 JSON, 通过扩展名自动检测)
 
-# 调试模式 (已废弃, 引擎忽略此配置)
+# 调试模式 (已废弃, 引擎忽略)
 debug_mode: 0
-comment_debug_mode: "已废弃, 引擎不再使用"
 
 # 队伍名 (任何 UTF-8 字符串)
 team_name: ！？区猴猴区？！
-comment_team_name: "队伍名, UTF-8 字符串"
 
-# 前缀列表 (每个前缀独立枚举, '+' = 无前缀)
+# 前缀列表 ('+' = 无前缀)
 prefixes:
 - name: 睡觉掀开被子全都是🐒🐛
-  comment: "前缀内容, '+' = 无前缀"
 
-# 后缀列表
+# 后缀列表 ('+' = 无后缀)
 suffixes:
 - name: +
-  comment: "后缀内容, '+' = 无后缀"
 
 # ---- 字符集 ----
 character_set:
+  # 单字符字节数: 1/2/3/4
   single_char_length: 4
-  comment_length: "单字符字节数: 1/2/3/4"
+
+  # 字符集类型:
+  #   1字节: 1=数字 2=小写字母 3=大写字母 4=自定义编码 5=ASCII字符
+  #   2字节: 1=小写希腊 2=大写希腊 3=小写俄文 4=大写俄文 5=小写拉丁 6=大写拉丁 7=自定义 8=Unicode区间
+  #   3字节: 1=全部汉字 2=常用汉字 3=平假名 4=片假名 5=盲文 6=扩展汉字 7=自定义 8=Unicode区间
+  #   4字节: 1=扩展汉字 2=自定义 3=Unicode区间
   types:
   - 2
-  comment_types: "1字节: 1=数字 2=小写字母 3=大写字母 4=自定义编码 5=ASCII字符"
-  comment_types_2: "2字节: 1=小写希腊 2=大写希腊 3=小写俄文 4=大写俄文 5=小写拉丁 6=大写拉丁 7=自定义 8=Unicode区间"
-  comment_types_3: "3字节: 1=全部汉字 2=常用汉字 3=平假名 4=片假名 5=盲文 6=扩展汉字 7=自定义 8=Unicode区间"
-  comment_types_4: "4字节: 1=扩展汉字 2=自定义 3=Unicode区间"
+
+  # 自定义字符的 UTF-8 字节值 (type=自定义时使用)
   custom_values:
   - 240
   - 159
@@ -70,52 +70,60 @@ character_set:
   - 159
   - 144
   - 137
-  comment_custom: "自定义字符的 UTF-8 字节值 (type=自定义时使用)"
+
+  # Unicode 区间 (type=Unicode时使用): [{"start": 128, "end": 2047}]
   unicode_ranges: []
-  comment_unicode: 'Unicode 区间 (type=Unicode时使用): [{"start": 128, "end": 2047}]'
+
+  # 已废弃, 引擎忽略
   output_charset: 1
-  comment_output: "已废弃, 引擎忽略"
 
 # ---- 枚举 ----
 enumeration:
+  # 枚举模式: 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(区间+配对)
   mode: 1
-  comment_mode: "枚举模式: 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(区间+配对前缀后缀)"
+
+  # 可变字符数 (名字中间部分的字符个数)
   variable_length: 12
-  comment_variable: "可变字符数 (名字中间部分的字符个数)"
+
+  # 区间, end 必须为有限值
   ranges:
   - count: 1
     start: 500000000000
     end: 750000000000
-    comment: "count 个前缀使用此区间 [start, end)"
-  comment_ranges: "区间信息, end 必须为有限值"
 
 # ---- 收集阈值 ----
 collection:
+  # XP (虚评) 最低阈值, 推荐 4900~5000
   xp_min: 4900
-  comment_xp: "XP (虚评) 最低阈值, 推荐 4900~5000"
+
+  # XD (虚单) 最低阈值, 推荐 5600~6000, 与 XP 为或关系
   xd_min: 5600
-  comment_xd: "XD (虚单) 最低阈值, 推荐 5600~6000, 与 XP 为或关系"
+
+  # 是否收集特殊属性号: 0=否 1=是(写到 out/blue.txt)
   collect_mode: 1
-  comment_collect: "是否收集特殊属性号? 0=否 1=是(写到 out/blue.txt)"
+
+  # collect_mode=2 时生效 (未实现)
   special_thresholds:
     eight_v_min: 777
     seven_v_min: 700
     hl_min: 93
     hp398_eight_v_min: 741
-    comment: "已废弃 (collect_mode=2 未实现)"
 
 # ---- 输出 ----
 output:
+  # 输出是否包含虚评虚单分数: 0=否 1=是
   output_xp: 0
-  comment_output_xp: "输出是否包含虚评虚单分数: 0=否 1=是"
+
+  # 任务日志输出: 0=文件(out/task_log.txt) 1=屏幕
   log_output: 0
-  comment_log: "任务日志输出: 0=文件(out/task_log.txt) 1=屏幕"
+
+  # 速度信息输出: 0=文件(out/speed_log.txt) 1=屏幕
   speed_output: 1
-  comment_speed: "速度信息输出: 0=文件(out/speed_log.txt) 1=屏幕"
+
+  # 输出文件名: + =随机名, - =时间戳, 其他 =自定义 (自动加 out/ 前缀)
   result_file: '-'
-  comment_result: "输出文件名: + =随机名, - =时间戳, 其他 =自定义 (均自动加 out/ 前缀)"
 
 # ---- 线程 ----
 threads:
-  worker_threads: 5
-  comment: "工作线程数, -1 =自动检测CPU线程数"
+  # 工作线程数, -1 =自动检测最大CPU线程数
+  worker_threads: -1
