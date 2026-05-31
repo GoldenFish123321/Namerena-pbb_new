@@ -33,6 +33,10 @@ def ensure_deps():
     except ImportError: deps.append("setuptools")
     try: import pybind11
     except ImportError: deps.append("pybind11")
+    # TOML: Python 3.11+ 内置 tomllib, 旧版需要 tomli
+    if sys.version_info < (3, 11):
+        try: import tomli
+        except ImportError: deps.append("tomli")
     if deps:
         print(f"[main] Installing: {', '.join(deps)}", file=sys.stderr)
         for d in deps: pip_install(d)
@@ -97,6 +101,12 @@ def main():
     if suffix in ('.yaml', '.yml'):
         if not HAS_YAML: print("ERROR: PyYAML not installed", file=sys.stderr); sys.exit(1)
         with open(config_path, encoding="utf-8") as f: config = yaml.safe_load(f)
+    elif suffix == '.toml':
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        with open(config_path, "rb") as f: config = tomllib.load(f)
     else:
         with open(config_path, encoding="utf-8") as f: config = json.load(f)
 
