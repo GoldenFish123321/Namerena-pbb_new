@@ -93,14 +93,17 @@ def detect_avx2():
 def build_engine():
     """编译 C++ 引擎 (engine_main.cpp → pbb_engine).
     
-    编译策略:
-      Linux x86_64  — g++ -O3 -mavx2 -mfma (AVX2)
+    编译策略 (按平台/编译器):
+      Linux x86_64  — g++ -O3 -mavx2 -mfma
       Linux ARM     — g++ -O3 (无 SIMD)
-      Windows       — g++ -O2 (MSVC 兼容)
+      Windows MSVC  — cl /O2 (自动检测)
+      Windows MinGW — g++ -O2 (回退)
     
     增量编译: 只在源码比二进制新时重编.
     """
     bin_path = os.path.join(BASE_DIR, "pbb_engine")
+    if sys.platform == "win32":
+        bin_path += ".exe"          # Windows 可执行文件扩展名
     src_dir = os.path.join(BASE_DIR, "src")
     main_cpp = os.path.join(BASE_DIR, "engine_main.cpp")
 
@@ -119,15 +122,27 @@ def build_engine():
     if not need:
         return bin_path
 
-    # 编译旗标: Linux 用 GCC 优化, Windows 用 MSVC 兼容旗标
-    flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-    if detect_avx2():
-        flags.extend(["-mavx2", "-mfma"])
-        print("[main] AVX2 detected", file=sys.stderr)
+    # 编译旗标 + 编译器选择
     if sys.platform == "win32":
-        flags = ["/std:c++17", "/O2"]
+        # Windows: 优先 MSVC, 回退 MinGW g++
+        if shutil.which("cl"):
+            flags = ["/std:c++17", "/O2", "/EHsc"]
+            cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
+        elif shutil.which("g++"):
+            flags = ["-std=c++17", "-O2"]
+            cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
+        else:
+            print("ERROR: 未找到 C++ 编译器. 请安装 Visual Studio Build Tools 或 MinGW.",
+                  file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Linux / Termux: g++ (或 clang++)
+        flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        if detect_avx2():
+            flags.extend(["-mavx2", "-mfma"])
+            print("[main] AVX2 detected", file=sys.stderr)
+        cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
 
-    cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
     print(f"[main] Compiling: {' '.join(cmd)}", file=sys.stderr)
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0:
