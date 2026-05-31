@@ -78,6 +78,7 @@ inline int engine_main(int argc,char**argv){
     // 初始化 Name 状态机 (队伍名 KSA)
     Name name_init;name_init.load_team(team.c_str());
     TaskQueue q;std::mutex out_mtx;std::atomic<int>tasks_done{0},total_found{0};
+    int max_xp=0,max_xd=0;  // 全局最大 XP/XD (out_mtx 保护)
     auto t_start=std::chrono::steady_clock::now();
     std::mt19937_64 rng_global(std::chrono::steady_clock::now().time_since_epoch().count());
 
@@ -116,13 +117,13 @@ inline int engine_main(int argc,char**argv){
                     for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);}
                     ScoreResult r=score_full(buf,nlen,name);
                     if(!r.flag)continue;int emin=xpm;if(r.flag3>=50)emin-=300;
-                    if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);found++;if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
+                    if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);found++;if(r.xp>max_xp)max_xp=r.xp;if(r.xd>max_xd)max_xd=r.xd;if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
                     if(collect_mode==1&&fp_blue){int sum=r.sum,prop7=r.props[7],hl=*std::min_element(r.props,r.props+7);if(sum>=777||(sum*3-prop7)>=2000||(prop7==398&&sum>=741)||(hl>=93)){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
                 }
             }else{
-                for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);now/=clen;}ScoreResult r=score_full(buf,nlen,name);if(!r.flag)continue;int emin=xpm;if(r.flag3>=50)emin-=300;if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);found++;if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}if(collect_mode==1&&fp_blue){int sum=r.sum,prop7=r.props[7],hl=*std::min_element(r.props,r.props+7);if(sum>=777||(sum*3-prop7)>=2000||(prop7==398&&sum>=741)||(hl>=93)){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}}
+                for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);now/=clen;}ScoreResult r=score_full(buf,nlen,name);if(!r.flag)continue;int emin=xpm;if(r.flag3>=50)emin-=300;if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);found++;if(r.xp>max_xp)max_xp=r.xp;if(r.xd>max_xd)max_xd=r.xd;if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}if(collect_mode==1&&fp_blue){int sum=r.sum,prop7=r.props[7],hl=*std::min_element(r.props,r.props+7);if(sum>=777||(sum*3-prop7)>=2000||(prop7==398&&sum>=741)||(hl>=93)){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}}
             }
-            tasks_done+=1;int td=tasks_done.load();if(td%100==0||td<=10){auto now=std::chrono::steady_clock::now();double sec=std::chrono::duration<double>(now-t_start).count();fprintf(flog,"task%d done, tot=%d, speed=%.4fT/d\n",td,total_found.load()+found,td*NUMBER_PER_TASK/sec*86400/1e12);fflush(flog);}}
+            tasks_done+=1;int td=tasks_done.load();if(td%100==0||td<=10){auto now=std::chrono::steady_clock::now();double sec=std::chrono::duration<double>(now-t_start).count();int mxp,mxd;{std::lock_guard lk(out_mtx);mxp=max_xp;mxd=max_xd;}fprintf(flog,"task%d done, tot=%d, max XP=%d XD=%d, speed=%.4fT/d\n",td,total_found.load()+found,mxp,mxd,td*NUMBER_PER_TASK/sec*86400/1e12);fflush(flog);}}
         total_found+=found;};
 
     // 启动线程
@@ -133,6 +134,6 @@ inline int engine_main(int argc,char**argv){
 
     // 最终报告
     auto t_end=std::chrono::steady_clock::now();double sec=std::chrono::duration<double>(t_end-t_start).count();
-    fprintf(stderr,"tot=%d, time: %.2fs, speed: %.6fT/d\n",total_found.load(),sec,tasks_done.load()*NUMBER_PER_TASK/sec*86400/1e12);
+    fprintf(stderr,"tot=%d, max XP=%d XD=%d, time: %.2fs, speed: %.6fT/d\n",total_found.load(),max_xp,max_xd,sec,tasks_done.load()*NUMBER_PER_TASK/sec*86400/1e12);
     return 0;
 }

@@ -176,15 +176,19 @@ def main():
     os.makedirs("out", exist_ok=True)
     print(f"[main] Threads: {config['threads']['worker_threads']}, Mode: {en['mode']}", file=sys.stderr)
 
-    # ---- 启动引擎 ----
+    # ---- 启动引擎 (实时读取 stderr) ----
     t0 = time.time()
-    result = subprocess.run([engine_bin], input=params, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([engine_bin], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    proc.stdin.write(params)
+    proc.stdin.close()
+    for line in proc.stderr:
+        line = line.strip()
+        if line: print(f"  {line}", file=sys.stderr, flush=True)
+    proc.wait()
     elapsed = time.time() - t0
 
-    for line in result.stderr.strip().split("\n"):
-        if line.strip(): print(f"  {line.strip()}", file=sys.stderr)
-    if result.returncode != 0:
-        print(f"[main] Engine failed ({result.returncode})", file=sys.stderr); sys.exit(1)
+    if proc.returncode != 0:
+        print(f"[main] Engine failed ({proc.returncode})", file=sys.stderr); sys.exit(1)
 
     # ---- 统计结果 ----
     out_path = os.path.join("out", result_file)
