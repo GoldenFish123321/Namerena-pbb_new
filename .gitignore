@@ -1,5 +1,6 @@
 # Build artifacts
 pbb_engine
+pbb_engine.exe
 pbb_core*.so
 pbb_core*.pyd
 build/
@@ -8,6 +9,7 @@ build/
 __pycache__/
 *.pyc
 *.pyo
+.venv/
 
 # Output
 out/

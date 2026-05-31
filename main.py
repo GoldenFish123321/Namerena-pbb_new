@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))                   # 项目
 
 
 # ═══════════════════════════════════════════════════════════════
-# 环境检测 + 自动安装
+# 依赖检查 (依赖由 run.sh / run.bat 自动安装到 .venv)
 # ═══════════════════════════════════════════════════════════════
 
 def check_python():
@@ -32,36 +32,25 @@ def check_python():
         sys.exit(1)
 
 
-def pip_install(pkg):
-    """静默 pip install (跳过系统包保护)."""
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", pkg, "--break-system-packages"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def ensure_deps():
-    """检查并自动安装缺失的 Python 依赖.
+def check_deps():
+    """检查 Python 依赖是否已安装 (由 run.sh/run.bat 负责安装).
     
-    需要的包:
-      pyyaml     — YAML 配置解析
-      setuptools — pybind11 构建依赖 (Python 3.12+ 移除了 distutils)
-      pybind11   — C++/Python 桥接
-      tomli      — TOML 配置解析 (Python < 3.11, 3.11+ 内置 tomllib)
+    如果直接运行 main.py 发现缺失, 提示用 run.sh/run.bat 启动.
     """
-    deps = []
+    missing = []
     try: import yaml
-    except ImportError: deps.append("pyyaml")
+    except ImportError: missing.append("pyyaml")
     try: import setuptools
-    except ImportError: deps.append("setuptools")
+    except ImportError: missing.append("setuptools")
     try: import pybind11
-    except ImportError: deps.append("pybind11")
+    except ImportError: missing.append("pybind11")
     if sys.version_info < (3, 11):
         try: import tomli
-        except ImportError: deps.append("tomli")
-    if deps:
-        print(f"[main] Installing: {', '.join(deps)}", file=sys.stderr)
-        for d in deps:
-            pip_install(d)
+        except ImportError: missing.append("tomli")
+    if missing:
+        print(f"ERROR: 缺少依赖: {', '.join(missing)}", file=sys.stderr)
+        print("  请用 run.sh 或 run.bat 启动 (自动创建虚拟环境并安装依赖)", file=sys.stderr)
+        sys.exit(1)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -158,7 +147,7 @@ def build_engine():
 def main():
     # ── 1. 环境准备 ──
     check_python()
-    ensure_deps()
+    check_deps()
     os.chdir(BASE_DIR)                     # 切换工作目录到项目根
     ensure_pbb_core()                      # pybind11 桥接模块
     import pbb_core                        # 导入字符集/评分 API
