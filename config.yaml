@@ -5,11 +5,11 @@
 debug_mode: 0
 
 # 队伍名 (任何 UTF-8 字符串)
-team_name: ！？区猴猴区？！
+team_name: test
 
 # 前缀列表 ('+' = 无前缀)
 prefixes:
-- name: 睡觉掀开被子全都是🐒🐛
+- name: test-
 
 # 后缀列表 ('+' = 无后缀)
 suffixes:
@@ -83,13 +83,13 @@ enumeration:
   mode: 1
 
   # 可变字符数 (名字中间部分的字符个数)
-  variable_length: 12
+  variable_length: 8
 
   # 区间, end 必须为有限值
   ranges:
   - count: 1
-    start: 500000000000
-    end: 750000000000
+    start: 0
+    end: 100000000
 
 # ---- 收集阈值 ----
 collection:
@@ -112,10 +112,10 @@ collection:
 # ---- 输出 ----
 output:
   # 输出是否包含虚评虚单分数: 0=否 1=是
-  output_xp: 0
+  output_xp: 1
 
   # 任务日志输出: 0=文件(out/task_log.txt) 1=屏幕
-  log_output: 0
+  log_output: 1
 
   # 速度信息输出: 0=文件(out/speed_log.txt) 1=屏幕
   speed_output: 1
