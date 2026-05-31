@@ -71,7 +71,7 @@
     "comment_result": "输出文件名: + =随机名, - =时间戳, 其他 =自定义 (均自动加 out/ 前缀)"
   },
   "threads": {
-    "worker_threads": 5,
-    "comment": "工作线程数, -1 =自动检测CPU线程数"
+    "worker_threads": -1,
+    "comment": "工作线程数, -1 =自动检测最大CPU线程数"
   }
 }

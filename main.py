@@ -88,7 +88,7 @@ def main():
     except ImportError: HAS_YAML = False
 
     parser = argparse.ArgumentParser(description="PBB Name Scoring Tester")
-    parser.add_argument("-c", "--config", default="config.yaml")
+    parser.add_argument("-c", "--config", default="config.json")
     parser.add_argument("--threads", type=int, help="覆盖线程数, -1=自动")
     args = parser.parse_args()
 
