@@ -206,6 +206,13 @@ def main():
     # ── 3. 构建字符集 ──
     # 从配置中读取字符集类型, 通过 pbb_core API 组装为字节流.
     # 字节流以 hex 编码后通过 stdin 传给 C++ 引擎.
+
+    def _custom_bytes(values):
+        """解析 custom_values: 字符串 '🐒🐵' → UTF-8 编码, 数字列表 [240,159,...] → 字节数组 (兼容旧格式)."""
+        if isinstance(values, str):
+            return values.encode("utf-8")
+        return bytes([int(x) & 0xFF for x in values])
+
     pbb_core.init_exhanzi()
     cs = config["character_set"]
     scl = cs["single_char_length"]          # 单字符字节数 (1/2/3/4)
@@ -217,7 +224,7 @@ def main():
             if t == 1:   buf.extend(b'0123456789')
             elif t == 2: buf.extend(b'abcdefghijklmnopqrstuvwxyz')
             elif t == 3: buf.extend(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-            elif t in (4, 5): buf.extend(bytes([int(x) & 0xFF for x in cs.get("custom_values", [])]))
+            elif t in (4, 5): buf.extend(_custom_bytes(cs.get("custom_values", [])))
 
         # ── 2 字节字符集 ──
         elif scl == 2:
@@ -227,7 +234,7 @@ def main():
             elif t == 4: buf.extend(pbb_core.get_EWEN_bytes())          # 大写俄文
             elif t == 5: buf.extend(pbb_core.get_lading_bytes())        # 小写拉丁
             elif t == 6: buf.extend(pbb_core.get_LADING_bytes())        # 大写拉丁
-            elif t == 7: buf.extend(bytes([int(x) & 0xFF for x in cs.get("custom_values", [])]))
+            elif t == 7: buf.extend(_custom_bytes(cs.get("custom_values", [])))
             elif t == 8:
                 for r in cs.get("unicode_ranges", []):
                     for cp in range(r["start"], r["end"] + 1):
@@ -244,7 +251,7 @@ def main():
             elif t == 4: buf.extend(pbb_core.get_pianjia_bytes())       # 片假名
             elif t == 5: buf.extend(pbb_core.get_mangwen_bytes())       # 盲文
             elif t == 6: buf.extend(pbb_core.get_extended_hanzi_3_bytes())
-            elif t == 7: buf.extend(bytes([int(x) & 0xFF for x in cs.get("custom_values", [])]))
+            elif t == 7: buf.extend(_custom_bytes(cs.get("custom_values", [])))
             elif t == 8:
                 for r in cs.get("unicode_ranges", []):
                     for cp in range(r["start"], r["end"] + 1):
@@ -253,7 +260,7 @@ def main():
         # ── 4 字节字符集 ──
         elif scl == 4:
             if t == 1:   buf.extend(pbb_core.get_extended_hanzi_4_bytes())
-            elif t == 2: buf.extend(bytes([int(x) & 0xFF for x in cs.get("custom_values", [])]))
+            elif t == 2: buf.extend(_custom_bytes(cs.get("custom_values", [])))
             elif t == 3:
                 for r in cs.get("unicode_ranges", []):
                     for cp in range(r["start"], r["end"] + 1):
