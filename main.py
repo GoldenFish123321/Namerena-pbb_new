@@ -7,6 +7,8 @@ PBB 名字评分测号器 — Python 编排层.
   2. 构建字符集 → stdin 管道传参 → 启动 C++ 子进程
   3. 实时读取引擎进度 → 统计最终结果
 
+编译由 build.py 负责 (icpx/g++/MSVC)，依赖由 run.sh/run.bat 安装到 .venv。
+
 用法:
   ./run.sh -c config.yaml --threads 8    # Linux/Termux
   run.bat -c config.yaml                 # Windows

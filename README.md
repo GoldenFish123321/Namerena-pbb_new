@@ -97,6 +97,7 @@ python3 main.py -c config.yaml \
 
 | 参数 | 覆盖字段 | 示例 |
 |------|----------|------|
+| `--rebuild` | (无) 强制重编 C++ 引擎 | `--rebuild` |
 | `--team` | `team_name` | `--team "测试"` |
 | `--threads` | `threads.worker_threads` | `--threads 8` |
 | `--mode` | `enumeration.mode` | `--mode 1` |
@@ -149,16 +150,20 @@ test-🙈🐛🐊🐍@test 5021 5003
 ## 架构
 
 ```
-main.py (Python)              pbb_engine (C++ 子进程)
+build.py (Python)              pbb_engine (C++ 子进程)
 ─────────────────            ───────────────────────────
-环境检测 + 自动编译           producer-consumer 引擎
-JSON/YAML/TOML 配置解析       编码循环
-字符集构建 (pbb_core .so)     RC4 状态机 + 评分
-stdin 管道传参                fprintf 直接写文件
-结果统计                      进度实时输出
+环境检测 + C++ 编译            producer-consumer 引擎
+(icpx / g++ / MSVC)           编码循环
+                              RC4 状态机 + 评分
+main.py (Python)              fprintf 直接写文件
+─────────────────             进度实时输出
+JSON/YAML/TOML 配置解析
+字符集构建 (pbb_core .so)
+stdin 管道传参
+结果统计
 ```
 
-Python 负责配置和编排，C++ 负责全部算法。子进程隔离消除 Python 运行时干扰。
+build.py 负责编译，main.py 负责编排。C++ 子进程隔离消除 Python 运行时干扰。
 
 ## 文件结构
 
