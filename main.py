@@ -92,11 +92,25 @@ def main():
     except ImportError: HAS_YAML = False
 
     parser = argparse.ArgumentParser(description="PBB Name Scoring Tester")
-    parser.add_argument("-c", "--config", default="config.json")
+    parser.add_argument("-c", "--config", default=None, help="配置文件路径 (默认依次尝试 config.json/yaml/toml)")
     parser.add_argument("--threads", type=int, help="覆盖线程数, -1=自动")
     args = parser.parse_args()
 
     config_path = args.config
+    if config_path is None:
+        for name in ("config.json", "config.yaml", "config.toml"):
+            if os.path.exists(name):
+                config_path = name
+                break
+        if config_path is None:
+            print("ERROR: 未找到配置文件 (尝试了 config.json/yaml/toml)", file=sys.stderr)
+            print("  提示: 复制 config.example.* → config.* 并修改", file=sys.stderr)
+            sys.exit(1)
+        print(f"[main] Auto config: {config_path}", file=sys.stderr)
+    elif not os.path.exists(config_path):
+        print(f"ERROR: 配置文件不存在: {config_path}", file=sys.stderr)
+        sys.exit(1)
+
     suffix = os.path.splitext(config_path)[1].lower()
     if suffix in ('.yaml', '.yml'):
         if not HAS_YAML: print("ERROR: PyYAML not installed", file=sys.stderr); sys.exit(1)
