@@ -36,6 +36,7 @@ character_set:
   - 2
 
   # 自定义字符 (字符串, 自动 UTF-8 编码; 兼容旧格式数字列表)
+  # 注意: scl=3 时用中文 ("你好世界"), scl=4 时用 emoji ("🐒🐵")
   custom_values: "🐒🐵🐊🦎🐍🐛🙈🙉🙊🐉"
 
   # Unicode 区间 (type=Unicode时使用)

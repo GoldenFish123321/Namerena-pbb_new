@@ -38,7 +38,7 @@
     "_comment_types_4byte": "  4字节: 1=扩展汉字 2=自定义 3=Unicode区间",
 
     "custom_values": "🐒🐵🐊🦎🐍🐛🙈🙉🙊🐉",
-    "_comment_custom": "自定义字符 (字符串, 自动 UTF-8 编码; 兼容旧格式 [240,159,...])",
+    "_comment_custom": "自定义字符 (字符串; scl=3 用中文, scl=4 用 emoji; 兼容旧格式数字列表)",
 
     "unicode_ranges": [],
     "_comment_unicode": "Unicode 区间 (type=Unicode时使用): [{\"start\": 128, \"end\": 2047}]",
