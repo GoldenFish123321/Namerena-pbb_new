@@ -69,7 +69,7 @@ xd_min = 5600
 # 特殊属性号收集: 0=否 1=破纪录号(out/blue.txt)
 collect_mode = 1
 
-# [未实现] collect_mode=2 时生效
+# collect_mode=2 时生效
 [collection.special_thresholds]
 eight_v_min = 777
 seven_v_min = 700

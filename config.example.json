@@ -74,10 +74,10 @@
     "_comment_xd": "虚单最低阈值, 推荐 5600~6000 (与虚评为或关系)",
 
     "collect_mode": 1,
-    "_comment_collect": "特殊属性号收集: 0=否 1=破纪录号(out/blue.txt) 2=自定义阈值[未实现]",
+    "_comment_collect": "特殊属性号收集: 0=否 1=破纪录号(out/blue.txt) 2=自定义阈值",
 
     "special_thresholds": {
-      "_comment": "[未实现] collect_mode=2 时生效",
+      "_comment": "collect_mode=2 时生效",
       "eight_v_min": 777,
       "seven_v_min": 700,
       "hl_min": 93,
