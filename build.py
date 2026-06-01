@@ -96,65 +96,60 @@ def _detect_simd(compiler):
 
 
 def _find_compilers(for_core=False):
-    """Returns list of (name, flags, simd_name, is_msvc) in priority order.
-
-    Rules:
-      - pbb_core (for_core=True) MUST match Python's compiler ABI.
-        Windows → cl only.  Other platforms → same as engine.
-      - Engine (for_core=False) picks best available compiler.
-        Linux:   icpx (-xHost) → g++
-        ARM:     g++ (NEON mandatory)
-        Windows: icpx (-xHost) → g++ (AVX-512) → cl
+    """Detect all available compilers, return in performance order.
+    Each entry: (name, flags, simd_name, is_msvc).
+    pbb_core on Windows (for_core=True): cl first (Python ABI), then others.
+    Otherwise: icpx > g++ > cl, regardless of platform.
     """
     result = []
     is_win = sys.platform == "win32"
 
-    # Find icpx binary (Linux + Windows)
+    # ---- Detect all compilers ----
     icpx = shutil.which("icpx")
+    gpp  = shutil.which("g++")
+    cl   = shutil.which("cl") if is_win else None
+
+    # icpx: search oneAPI install paths if not in PATH
     if not icpx:
-        paths = [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
-                 "/opt/intel/oneapi"]
-        for d in paths:
+        for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
+                  "/opt/intel/oneapi"]:
             for ver in ["latest", "2026.0", "2025.0"]:
                 p = os.path.join(d, "compiler", ver, "bin",
                                  "icpx.exe" if is_win else "icpx")
                 if os.path.exists(p): icpx = p; break
 
-    if for_core and is_win:
-        # pbb_core on Windows: cl only (Python ABI)
-        if shutil.which("cl"):
-            simd_flags, simd_name = _detect_simd("cl")
-            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
-        return result
+    # ---- Build compiler entries ----
+    entries = []
 
-    if is_win:
-        # Windows engine: icpx (-xHost) → g++ (AVX-512) → cl
-        if icpx:
+    if icpx:
+        if is_win:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
                      "-qopenmp", "-xCORE-AVX2", "-finline-functions"]
-            result.append((icpx, flags, "AVX2", False))
-        if shutil.which("g++"):
-            base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-            simd_flags, simd_name = _detect_simd("g++")
-            result.append(("g++", base_flags + simd_flags, simd_name, False))
-        if shutil.which("cl"):
-            simd_flags, simd_name = _detect_simd("cl")
-            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
-        return result
+            entries.append((icpx, flags, "AVX2", False))
+        else:
+            flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                     "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
+                     "-lpthread", "-xHost", "-finline-functions"]
+            entries.append((icpx, flags, "auto (-xHost)", False))
 
-    # Linux / ARM
-    if icpx:
-        flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
-                 "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                 "-lpthread", "-xHost", "-finline-functions"]
-        result.append((icpx, flags, "auto (-xHost)", False))
-    if shutil.which("g++"):
-        base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+    if gpp:
+        base = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         simd_flags, simd_name = _detect_simd("g++")
-        result.append(("g++", base_flags + simd_flags, simd_name, False))
+        entries.append(("g++", base + simd_flags, simd_name, False))
 
-    return result
+    if cl:
+        simd_flags, simd_name = _detect_simd("cl")
+        entries.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
+
+    # ---- Order: performance (icpx > g++ > cl), exception for pbb_core on Windows ----
+    if for_core and is_win and cl:
+        # pbb_core on Windows: cl must be first (Python ABI)
+        cl_entry   = [e for e in entries if e[0] == "cl"]
+        other      = [e for e in entries if e[0] != "cl"]
+        return cl_entry + other
+
+    return entries  # default: icpx > g++ > cl
 
 
 def _py_include():
