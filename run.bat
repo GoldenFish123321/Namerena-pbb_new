@@ -1,4 +1,4 @@
-chcp 65001 >nul 2>&1
+@chcp 65001 >nul 2>&1
 @echo off
 REM PBB Name Scoring Tester — One-click launcher (Windows)
 cd /d "%~dp0"

@@ -77,8 +77,8 @@ def ensure_pbb_core(rebuild=False):
     )
     # 抑制 setuptools 编译日志
     import io
-    _old_stdout = sys.stdout
-    sys.stdout = io.StringIO()
+    _old_out, _old_err = sys.stdout, sys.stderr
+    sys.stdout = sys.stderr = io.StringIO()
     try:
         setup(
             name="pbb_core",
@@ -89,7 +89,7 @@ def ensure_pbb_core(rebuild=False):
             script_args=["build_ext", "--inplace"],
         )
     finally:
-        sys.stdout = _old_stdout
+        sys.stdout, sys.stderr = _old_out, _old_err
 
 
 def _compile_flags():
