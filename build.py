@@ -36,33 +36,65 @@ def _engine_bin():
 
 def _pbb_core_exists():
     return bool(glob.glob(os.path.join(BASE_DIR, "pbb_core*.so")) or
-                glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")))
+                glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")) or
+                glob.glob(os.path.join(BASE_DIR, "build/lib*", "pbb_core*")))
+
+
+def _find_compiler():
+    """返回 (compiler_name, flags) 或 None."""
+    # icpx: 检查 PATH + oneAPI 默认路径
+    icpx = shutil.which("icpx")
+    if not icpx and sys.platform == "win32":
+        for ver in ["latest", "2026.0", "2025.0"]:
+            p = f"C:\\Program Files (x86)\\Intel\\oneAPI\\compiler\\{ver}\\bin\\icpx.exe"
+            if os.path.exists(p): icpx = p; break
+    if not icpx and sys.platform != "win32":
+        for ver in ["latest", "2026.0", "2025.0"]:
+            p = f"/opt/intel/oneapi/compiler/{ver}/bin/icpx"
+            if os.path.exists(p): icpx = p; break
+    if icpx:
+        flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                 "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
+        if sys.platform == "win32":
+            flags += ["-xCORE-AVX2", "-qopenmp"]
+        else:
+            flags += ["-xHost", "-finline-functions", "-lpthread"]
+        return ("icpx", flags)
+
+    # g++
+    if shutil.which("g++"):
+        flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        if sys.platform != "win32":
+            try:
+                if "avx2" in open("/proc/cpuinfo").read().lower():
+                    flags += ["-mavx2", "-mfma"]
+            except: pass
+        return ("g++", flags)
+
+    # MSVC
+    if sys.platform == "win32" and shutil.which("cl"):
+        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"])
+
+    return None
 
 
 def _compile_engine():
+    cc = _find_compiler()
+    if not cc:
+        print("ERROR: No C++ compiler found (icpx/g++/cl)", file=sys.stderr)
+        sys.exit(1)
+
+    name, flags = cc
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
     inc = os.path.join(BASE_DIR, "src")
 
-    if sys.platform == "win32":
-        if shutil.which("g++"):
-            cmd = ["g++", "-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
-                   f"-I{inc}", "-o", out, src]
-        elif shutil.which("cl"):
-            cmd = ["cl", "/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w",
-                   f"/I{inc}", f"/Fe:{out}", src]
-        else:
-            print("ERROR: No C++ compiler found", file=sys.stderr)
-            sys.exit(1)
+    if name == "cl":
+        cmd = ["cl"] + flags + [f"/I{inc}", f"/Fe:{out}", src]
     else:
-        flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        try:
-            if "avx2" in open("/proc/cpuinfo").read().lower():
-                flags += ["-mavx2", "-mfma"]
-        except: pass
-        cmd = ["g++"] + flags + [f"-I{inc}", "-o", out, src]
+        cmd = [name] + flags + [f"-I{inc}", "-o", out, src]
 
-    print(f"[build] {' '.join(cmd)}", file=sys.stderr)
+    print(f"[build] {name}: {' '.join(cmd)}", file=sys.stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
