@@ -126,8 +126,7 @@ python3 main.py -c config.yaml \
 [env] OS: linux x86_64
 [env] CPU: x86_64 (6 cores)
 [env] Python: 3.12.3
-[env] engine: icpx(AVX-512) -> g++(AVX2)
-[env] pbb_core: icpx(AVX-512) -> g++(AVX2)
+[env] compilers: icpx(AVX-512) -> g++(AVX2)
 ```
 
 编译器按性能优先级自动选择，编译失败自动回退：
@@ -261,6 +260,8 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 ├── engine.py                 # 引擎执行: 构建字符集 → Popen → 解析结果
 ├── main.py                   # 编排层: CLI 解析 + 配置加载
 ├── engine_main.cpp           # C++ 引擎入口
+├── build/                    # 编译产物 (pbb_engine, pbb_core.{so,pyd})
+├── out/                      # 运行输出 (result_*.txt, blue.txt)
 ├── config.example.json       # JSON 配置示例
 ├── config.example.yaml       # YAML 配置示例
 ├── config.example.toml       # TOML 配置示例

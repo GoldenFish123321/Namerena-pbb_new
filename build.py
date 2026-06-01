@@ -1,49 +1,49 @@
 #!/usr/bin/env python3
-"""PBB build script — compile pbb_core (.so/.pyd) + pbb_engine (executable)."""
-import os, sys, glob, subprocess, shutil, sysconfig, tempfile
+"""
+PBB build system — compiler detection, SIMD probing, unified compilation.
+
+Called by main.py via ensure_all(rebuild, verbose).
+Not meant to be run directly — use ./run.sh or run.bat.
+"""
+import os, sys, shutil, subprocess, tempfile, sysconfig
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-REQUIRED_PY = (3, 8)
+BUILD_DIR = os.path.join(BASE_DIR, "build")
 
 
 def check_python():
-    if sys.version_info < REQUIRED_PY:
-        print(f"ERROR: Python {REQUIRED_PY[0]}.{REQUIRED_PY[1]}+ required", file=sys.stderr)
+    if sys.version_info < (3, 10):
+        print("ERROR: Python 3.10+ required", file=sys.stderr)
         sys.exit(1)
 
 
 def check_deps():
     missing = []
-    try: import yaml
-    except ImportError: missing.append("pyyaml")
     try: import pybind11
     except ImportError: missing.append("pybind11")
-    if sys.version_info < (3, 11):
-        try: import tomli
-        except ImportError: missing.append("tomli")
+    try: import yaml
+    except ImportError: pass  # optional
     if missing:
-        print(f"ERROR: missing deps: {', '.join(missing)}", file=sys.stderr)
+        print(f"ERROR: Missing Python packages: {', '.join(missing)}", file=sys.stderr)
         print("  Use run.sh or run.bat to auto-install", file=sys.stderr)
         sys.exit(1)
 
 
 def _engine_bin():
     name = "pbb_engine" + (".exe" if sys.platform == "win32" else "")
-    return os.path.join(BASE_DIR, name)
+    return os.path.join(BUILD_DIR, name)
 
 
 def _pbb_core_path():
     ext = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if sys.platform == "win32" else ".so")
-    return os.path.join(BASE_DIR, "pbb_core" + ext)
+    return os.path.join(BUILD_DIR, "pbb_core" + ext)
 
 
 def _pbb_core_exists():
-    return bool(glob.glob(os.path.join(BASE_DIR, "pbb_core*.so")) or
-                glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")))
+    return os.path.exists(_pbb_core_path())
 
 
 def _compiler_probe(compiler, flag):
-    """Test if compiler accepts a SIMD flag. Returns True if the flag works."""
     src = tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False)
     src.write("int main(){return 0;}\n")
     src.close()
@@ -77,7 +77,6 @@ def _detect_simd(compiler):
     if is_msvc:
         candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
     elif is_icpx:
-        # icpx -x flags: tune for specific Intel uarch + enable ISA
         # Windows: AVX2 only (AVX-512 causes LLVM crash on bridge.cpp + mixed-runtime issues)
         if is_win:
             candidates = [(["-xCORE-AVX2"], "AVX2")]
@@ -103,11 +102,10 @@ def _detect_simd(compiler):
     return ([], "none")
 
 
-def _find_compilers(for_core=False):
+def _find_compilers():
     """Detect all available compilers, return in performance order.
     Each entry: (name, flags, simd_name, is_msvc).
-    pbb_core on Windows (for_core=True): cl first (Python ABI), then others.
-    Otherwise: icpx > g++ > cl, regardless of platform.
+    Order: icpx > g++ > cl, regardless of platform or target.
     """
     result = []
     is_win = sys.platform == "win32"
@@ -187,10 +185,14 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
         cmd = [name] + flags
         for d in extra_includes:
             cmd.append(f"/I{d}")
+        # Redirect .obj to build/
+        obj_dir = os.path.dirname(out)
+        cmd.append(f"/Fo{obj_dir}/")
         if shared: cmd.append("/LD")
         cmd.append(src)
         if shared:
-            cmd += ["/link"] + extra_link + [f"/OUT:{out}"]
+            implib = os.path.join(obj_dir, os.path.splitext(os.path.basename(out))[0] + ".lib")
+            cmd += ["/link"] + extra_link + [f"/OUT:{out}", f"/IMPLIB:{implib}"]
         else:
             cmd += [f"/Fe:{out}"]
     else:
@@ -217,6 +219,7 @@ def _compile_pbb_core(verbose=False):
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
+    os.makedirs(BUILD_DIR, exist_ok=True)
     src = os.path.join(BASE_DIR, "src", "bridge.cpp")
     out = _pbb_core_path()
     includes = [os.path.join(BASE_DIR, "src"), pybind11.get_include()] + _py_include()
@@ -251,6 +254,7 @@ def _compile_engine(verbose=False):
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
+    os.makedirs(BUILD_DIR, exist_ok=True)
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
     includes = [os.path.join(BASE_DIR, "src")]
@@ -284,10 +288,11 @@ def _env_info():
     print(f"[env] Python: {sys.version.split()[0]}", file=sys.stderr)
 
     # Show all detected compilers with their SIMD levels
-    for label, is_core in [("engine", False), ("pbb_core", True)]:
-        compilers = _find_compilers(for_core=is_core)
-        names = [f"{c[0]}({c[2]})" for c in compilers]
-        print(f"[env] {label}: {' -> '.join(names) if names else 'NONE'}", file=sys.stderr)
+    compilers = _find_compilers()
+    names = []
+    for name, flags, simd_name, is_msvc in compilers:
+        names.append(f"{name}({simd_name})")
+    print(f"[env] compilers: {' -> '.join(names) if names else 'NONE'}", file=sys.stderr)
 
 
 def ensure_all(rebuild=False, verbose=False):
