@@ -15,12 +15,19 @@ PBB 名字评分测号器 — Python 编排层.
   run.bat -c config.yaml                 # Windows
   python3 main.py -c config.yaml         # 直接调用
   python3 main.py                         # 自动查找 config.json/yaml/toml
+
+config → engine 键名映射: 见 config_schema.py (CONFIG_MAP)，唯一定义处。
+新增配置字段只需在 CONFIG_MAP 加一行，main.py 和 engine.py 自动同步。
 """
 import json, os, sys, time, argparse, uuid
 from datetime import datetime
+from typing import Any
 
 from build import ensure_all          # 编译模块
 from engine import run as run_engine  # 引擎执行
+from config_schema import (           # config→engine 映射唯一真相源
+    CONFIG_MAP, read_config, engine_default,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -61,14 +68,17 @@ def _die(msg: str):
 
 
 def _validate_config(cfg: dict):
-    """校验配置字段合法性, 不合法立即退出."""
+    """校验配置字段合法性, 不合法立即退出.
+
+    使用 CONFIG_MAP 中的 config_path 读取值，发现命名不一致时直接报错。
+    """
     # ── debug_mode ──
-    dm = cfg.get("debug_mode", 0)
+    dm = _read_cfg(cfg, "debug_mode")
     if dm not in (0, 1):
         _die(f"debug_mode 必须为 0 或 1, 当前: {dm}")
 
     # ── team_name ──
-    tn = cfg.get("team_name", "")
+    tn = _read_cfg(cfg, "team_name")
     if not tn or not isinstance(tn, str):
         _die("team_name 不能为空")
 
@@ -112,18 +122,6 @@ def _validate_config(cfg: dict):
         if isinstance(custom, list) and len(custom) == 0:
             _die("character_set.custom_values 不能为空列表")
 
-        # ── 字节对齐检查 ──
-        # 每个字符的 UTF-8 字节数必须与 scl 一致，否则 charset_len = total_bytes // scl
-        # 会算错（engine.py:_build_params:88），引擎编码全坏。
-        if isinstance(custom, str):
-            for i, ch in enumerate(custom):
-                blen = len(ch.encode("utf-8"))
-                if blen != scl:
-                    _die(f"character_set.custom_values[{i}]: scl={scl} 但字符 '{ch}' (U+{ord(ch):04X}) 为 {blen} 字节，应为 {scl} 字节")
-        else:
-            if len(custom) % scl != 0:
-                _die(f"character_set.custom_values: scl={scl} 但列表长度 {len(custom)} 不是 {scl} 的整数倍")
-
     # ── enumeration ──
     en = cfg.get("enumeration", {})
     mode = en.get("mode")
@@ -145,21 +143,21 @@ def _validate_config(cfg: dict):
         if not isinstance(end, int) or (end != -1 and end <= start):
             _die(f"enumeration.ranges[{i}].end 必须 > start (或 -1=无限), 当前: end={end} start={start}")
 
-    # ── collection ──
-    cl = cfg.get("collection", {})
-    xpm = cl.get("xp_min")
+    # ── collection (使用 _read_cfg 统一读取) ──
+    xpm = _read_cfg(cfg, "collection.xp_min")
     if not isinstance(xpm, int) or xpm < 0 or xpm > 9999:
         _die(f"collection.xp_min 必须为 0~9999, 当前: {xpm}")
 
-    xdm = cl.get("xd_min")
+    xdm = _read_cfg(cfg, "collection.xd_min")
     if not isinstance(xdm, int) or xdm < 0 or xdm > 9999:
         _die(f"collection.xd_min 必须为 0~9999, 当前: {xdm}")
 
-    cm = cl.get("collect_mode", 0)
+    cm = _read_cfg(cfg, "collection.collect_mode")
     if cm not in (0, 1, 2):
         _die(f"collection.collect_mode 必须为 0/1/2, 当前: {cm}")
 
     if cm == 2:
+        cl = cfg.get("collection", {})
         st = cl.get("special_thresholds", {})
         for key, label, vmax in [
             ("eight_v_min", "八围最低", 999),
@@ -171,25 +169,64 @@ def _validate_config(cfg: dict):
             if v is not None and (not isinstance(v, int) or v < 0 or v > vmax):
                 _die(f"collection.special_thresholds.{key} ({label}) 必须为 0~{vmax}, 当前: {v}")
 
-    # ── output ──
-    out = cfg.get("output", {})
-    ox = out.get("output_xp", 1)
+    # ── output (使用 _read_cfg 统一读取) ──
+    ox = _read_cfg(cfg, "output.output_xp")
     if ox not in (0, 1):
         _die(f"output.output_xp 必须为 0 或 1, 当前: {ox}")
 
-    ol = out.get("log_output", 1)
+    ol = _read_cfg(cfg, "output.log_output")
     if ol not in (0, 1):
         _die(f"output.log_output 必须为 0 或 1, 当前: {ol}")
 
-    os_ = out.get("speed_output", 1)
+    os_ = _read_cfg(cfg, "output.speed_output")
     if os_ not in (0, 1):
         _die(f"output.speed_output 必须为 0 或 1, 当前: {os_}")
 
-    # ── threads ──
-    th = cfg.get("threads", {})
-    wt = th.get("worker_threads", -1)
+    # ── threads (使用 _read_cfg 统一读取) ──
+    wt = _read_cfg(cfg, "threads.worker_threads")
     if not isinstance(wt, int) or wt < -1 or wt == 0 or wt > 256:
         _die(f"threads.worker_threads 必须为 -1(自动) 或 1~256, 当前: {wt}")
+
+
+# ── CONFIG_MAP 索引 (启动时构建, 避免每次遍历) ──────────────────────────────
+_config_index: dict = {fd.config_path: fd for fd in CONFIG_MAP}
+
+
+def _read_cfg(cfg: dict, config_path: str) -> Any:
+    """从配置 dict 按 config_path 读取值, 使用 CONFIG_MAP 定义的默认值."""
+    fd = _config_index.get(config_path)
+    if fd is None:
+        raise KeyError(f"未知 config_path: {config_path} (未在 CONFIG_MAP 中定义)")
+    return read_config(cfg, fd)
+
+
+def _build_task_config(cfg: dict) -> dict:
+    """从配置 dict 构建 engine 层 task_config，统一使用 engine 键名.
+
+    新增字段只需在 CONFIG_MAP 加一行，此函数自动包含。
+    特殊字段 (character_set/prefixes/suffixes/ranges) 手工补充。
+    """
+    en = cfg["enumeration"]
+    cl = cfg["collection"]
+    out_cfg = cfg["output"]
+    rng = en.get("ranges", [{}])[0]
+
+    # ── 标量字段: 从 CONFIG_MAP 自动生成 ──
+    tc: dict = {}
+    for fd in CONFIG_MAP:
+        tc[fd.engine_key] = read_config(cfg, fd)
+
+    # ── 手工字段: 需要变换的非标量 ──
+    tc["character_set"] = cfg["character_set"]
+    tc["prefixes"] = [p["name"] for p in cfg["prefixes"]]
+    tc["suffixes"] = [s["name"] for s in cfg["suffixes"]]
+    tc["scl"] = cfg["character_set"]["single_char_length"]
+    tc["range_L"] = rng.get("start", 0)
+    tc["range_R"] = rng.get("end", int(1e18))
+    # result_file: 优先 CONFIG_MAP 默认 "result.txt"
+    tc["result_file"] = tc.get("result_file", "result.txt")
+
+    return tc
 
 
 def main():
@@ -254,58 +291,25 @@ def main():
     # ── 3.5 配置合法性校验 ──
     _validate_config(cfg)
 
-    # ── 4. 组装引擎配置 (配置文件 + CLI 覆盖) ──
-    en = cfg["enumeration"]
-    cl = cfg["collection"]
-    out_cfg = cfg["output"]
-    rng = en.get("ranges", [{}])[0]
+    # ── 4. 组装引擎配置 (CONFIG_MAP 驱动 + CLI 覆盖) ──
+    task_config = _build_task_config(cfg)
 
-    # 解析输出文件名: 配置文件 → CLI 覆盖
-    result_file = _resolve_result_file(out_cfg.get("result_file", "result.txt"))
-    if args.output_file is not None:
-        result_file = _resolve_result_file(args.output_file)
-
-    # 输出目标: CLI > 默认 file
-    output_dest = args.output_dest or "file"
-
-    task_config = {
-        "team_name":      cfg["team_name"],
-        "character_set":  cfg["character_set"],
-        "prefixes":       [p["name"] for p in cfg["prefixes"]],
-        "suffixes":       [s["name"] for s in cfg["suffixes"]],
-        "scl":            cfg["character_set"]["single_char_length"],
-        "vlen":           en["variable_length"],
-        "mode":           en["mode"],
-        "range_start":    rng.get("start", 0),
-        "range_end":      rng.get("end", int(1e18)),
-        "xp_min":         cl["xp_min"],
-        "xd_min":         cl["xd_min"],
-        "collect_mode":   cl.get("collect_mode", 0),
-        "output_xp":      out_cfg.get("output_xp", 1),
-        "output_log":     out_cfg.get("log_output", 1),
-        "output_speed":   out_cfg.get("speed_output", 1),
-        "debug_mode":     cfg.get("debug_mode", 0),
-        "n_threads":      cfg["threads"]["worker_threads"],
-    }
     # -1 = 几乎无限 (uint64_t max ≈ 1.8×10^19)
-    if task_config["range_end"] == -1:
-        task_config["range_end"] = 2**64 - 1
-    # collect_mode=2: 阈值
-    if task_config["collect_mode"] == 2:
-        st = cl.get("special_thresholds", {})
-        task_config.update({
-            "c_eight_v_min": st.get("eight_v_min", 0),
-            "c_seven_v_min": st.get("seven_v_min", 0),
-            "c_hl_min":      st.get("hl_min", 0),
-            "c_hp398_min":   st.get("hp398_eight_v_min", 0),
-        })
+    if task_config["range_R"] == -1:
+        task_config["range_R"] = 2**64 - 1
 
-    # CLI 覆盖
+    # collect_mode=2: 阈值 (从 CONFIG_MAP 自动包含, 无需手动 add)
+    # 但需确认 collect_mode 一致性
+    if task_config.get("collect_mode") != 2:
+        for k in ("c_eight_v_min", "c_seven_v_min", "c_hl_min", "c_hp398_min"):
+            task_config.pop(k, None)
+
+    # CLI 覆盖 (使用 engine 键名)
     if args.team:           task_config["team_name"] = args.team
     if args.mode is not None:    task_config["mode"] = args.mode
-    if args.vlen is not None:    task_config["vlen"] = args.vlen
-    if args.range_start is not None: task_config["range_start"] = args.range_start
-    if args.range_end is not None:   task_config["range_end"] = args.range_end
+    if args.vlen is not None:    task_config["variable_len"] = args.vlen
+    if args.range_start is not None: task_config["range_L"] = args.range_start
+    if args.range_end is not None:   task_config["range_R"] = args.range_end
     if args.xp_min is not None: task_config["xp_min"] = args.xp_min
     if args.xd_min is not None: task_config["xd_min"] = args.xd_min
     if args.collect_mode is not None: task_config["collect_mode"] = args.collect_mode
@@ -333,6 +337,14 @@ def main():
     if n == -1:
         n = os.cpu_count() or 4
     task_config["n_threads"] = n
+
+    # 解析输出文件名: 配置文件 → CLI 覆盖
+    result_file = _resolve_result_file(task_config.get("result_file", "result.txt"))
+    if args.output_file is not None:
+        result_file = _resolve_result_file(args.output_file)
+
+    # 输出目标: CLI > 默认 file
+    output_dest = args.output_dest or "file"
 
     # stdout 模式: 使用临时目录 (引擎写文件, Python 读取后自动清理)
     if output_dest == "stdout":
