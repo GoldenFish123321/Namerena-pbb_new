@@ -116,6 +116,8 @@ inline int engine_main(int argc,char**argv){
     int mex_cur=0;                          // 最小未完成 task_id
     std::vector<bool> mex_vis;              // task_id 完成标记
     unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
+    // mode 2/3/4: 随机模式不按 prefix 翻倍, 总名数 = range 长度
+    if(mode>=2) ALL_totnum = rR - rL;
     auto t_start=std::chrono::steady_clock::now();
     // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
