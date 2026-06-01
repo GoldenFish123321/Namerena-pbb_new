@@ -72,10 +72,10 @@ fi
 
 if $_use_venv; then
     _python=".venv/bin/python3"
-    _pip=".venv/bin/pip install --quiet"
+    _pip=".venv/bin/python3 -m pip install --quiet"
 else
     _python="python3"
-    _pip="pip install --quiet --break-system-packages"
+    _pip="python3 -m pip install --quiet --break-system-packages"
 fi
 
 # 安装依赖 (仅首次 .venv 或 venv 不可用时)
