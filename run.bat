@@ -58,8 +58,6 @@ if not exist ".venv\Scripts\python.exe" (
             pause
             exit /b 1
         )
-        echo [run] Installing deps with uv ...
-        uv pip install --python .venv\Scripts\python.exe pyyaml setuptools pybind11 tomli
     ) else (
         "%PYTHON%" -m venv .venv
         if errorlevel 1 (
@@ -67,12 +65,16 @@ if not exist ".venv\Scripts\python.exe" (
             pause
             exit /b 1
         )
-        echo [run] Installing deps with pip ...
-        .venv\Scripts\pip install pyyaml setuptools pybind11
-        if errorlevel 1 (echo WARNING: pip install failed. )
-        python -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>nul
-        if errorlevel 1 .venv\Scripts\pip install tomli
     )
+)
+
+REM Ensure deps every run (pip handles already-installed)
+if defined HAS_UV (
+    uv pip install --python .venv\Scripts\python.exe pyyaml setuptools pybind11 tomli >nul 2>&1
+) else (
+    .venv\Scripts\python -m pip install --quiet pyyaml setuptools pybind11 >nul 2>&1
+    python -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>nul
+    if errorlevel 1 .venv\Scripts\python -m pip install --quiet tomli >nul 2>&1
 )
 
 REM ---- Run ----
