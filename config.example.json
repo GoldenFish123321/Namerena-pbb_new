@@ -51,6 +51,7 @@
     "_comment": "──────── 枚举配置 ────────",
     "mode": 1,
     "_comment_mode": "枚举模式: 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(区间+配对)",
+      "_comment_mode_random": "mode 2/3/4: range 控总次数(chunks×1M), 随机范围=charset_len^vlen(自动), range.end 越大采样越多",
 
     "variable_length": 8,
     "_comment_variable": "可变字符数: 名字中间枚举部分的字符个数",
@@ -59,7 +60,7 @@
       {
         "start": 0,
         "end": 100000000,
-        "_comment": "区间 [start, end)"
+        "_comment": "mode 1: 枚举区间; mode 2/3/4: chunk 数=(end-start)/1M, 每个 chunk 1M 个随机名"
       }
     ],
     "_comment_ranges": "多个前缀共享此区间, end 必须为有限值"

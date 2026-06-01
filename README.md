@@ -63,6 +63,23 @@ threads:
 
 示例配置文件见 `config.example.json` / `config.example.yaml` / `config.example.toml`。
 
+## 枚举模式
+
+| mode | 行为 | 受控参数 |
+|------|------|----------|
+| **1** 顺序 | `[start, end)` 区间内按编号逐个枚举 | `ranges[0].start` / `end` |
+| **2** 随机(区间) | 每个 chunk 随机起点 + 剩余位顺序展开 | `ranges` 控 chunk 数，范围 = `charset_len^vlen` |
+| **3** 随机(逐位) | 每位独立随机选择 | 同上 |
+| **4** 随机(区间+配对) | 类似 mode 2，prefix/suffix 配对 | 同上 |
+
+**随机模式关键概念**：
+- **次数** = `(end - start) / 1M` 个 chunk，每个 chunk 1M 个名字
+- **随机范围** = `charset 字符数 ^ variable_length`（自动计算）
+- 例：10 个 emoji + `variable_length: 4` → 范围 = 10⁴ = 10000
+- `ranges[0].end` 设大一些获得更多采样（如 100M = 100 chunks = 1 亿次随机）
+
+> mode 2/3/4 配合 `seed` 可实现**确定性随机**——同 seed + 同 range → 任意线程数下结果完全一致。
+
 ## 字符集 type 对照
 
 | scl | type | 内容 |

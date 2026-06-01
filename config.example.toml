@@ -48,12 +48,13 @@ output_charset = 1
 # ──────── 枚举配置 ────────
 [enumeration]
 # 枚举模式: 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(区间+配对)
+# mode 2/3/4: range 控总次数(chunks×1M), 随机范围=charset_len^vlen(自动)
 mode = 1
 
 # 可变字符数: 名字中间枚举部分的字符个数
 variable_length = 8
 
-# 区间 [start, end), end 必须为有限值
+# mode 1: 枚举区间; mode 2/3/4: chunk 数 = (end-start)/1M
 [[enumeration.ranges]]
 start = 0         # 起始编号 (含)
 end = 100000000   # 结束编号 (不含), 100M = 约 1~2 分钟
