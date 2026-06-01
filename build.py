@@ -124,8 +124,10 @@ def _find_compilers(for_core=False):
             flags += ["-xHost", "-finline-functions"]
             result.append((icpx, flags, "auto (-xHost)", False))
 
-    # Windows: cl first (reliable), then icpx.  Other platforms: icpx first.
-    if sys.platform == "win32":
+    # Windows: pbb_core needs cl (Python ABI), engine prefers g++ (AVX-512)
+    # Linux/ARM: icpx first, then g++
+    if sys.platform == "win32" and for_core:
+        # pbb_core: cl for Python ABI compatibility
         if shutil.which("cl"):
             simd_flags, simd_name = _detect_simd("cl")
             result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
@@ -134,7 +136,18 @@ def _find_compilers(for_core=False):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             simd_flags, simd_name = _detect_simd("g++")
             result.append(("g++", base_flags + simd_flags, simd_name, False))
+    elif sys.platform == "win32":
+        # engine on Windows: g++ first (reliable, AVX-512), cl as backup
+        if shutil.which("g++"):
+            base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+            simd_flags, simd_name = _detect_simd("g++")
+            result.append(("g++", base_flags + simd_flags, simd_name, False))
+        if shutil.which("cl"):
+            simd_flags, simd_name = _detect_simd("cl")
+            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
+        _add_icpx()
     else:
+        # Linux/ARM: icpx first, then g++
         _add_icpx()
         if shutil.which("g++"):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
