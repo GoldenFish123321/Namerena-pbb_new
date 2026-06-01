@@ -200,6 +200,7 @@ def main():
     parser.add_argument("--output-dest", choices=["file", "stdout", "both"], default=None,
                         help="输出目标: file=仅文件(默认) stdout=仅终端 both=文件+终端")
     parser.add_argument("--debug", action="store_true", help="启用引擎 debug 诊断输出")
+    parser.add_argument("--seed", type=int, help="覆盖: 随机种子 (mode 2/3/4 确定性随机)")
     parser.add_argument("--scl", type=int, choices=[1,2,3,4], help="覆盖: character_set.single_char_length")
     parser.add_argument("--types", help="覆盖: character_set.types (逗号分隔, 如 1,2,3)")
     parser.add_argument("--custom-values", help="覆盖: character_set.custom_values (字符串)")
@@ -299,6 +300,7 @@ def main():
     if args.collect_mode is not None: task_config["collect_mode"] = args.collect_mode
     if args.output_xp is not None: task_config["output_xp"] = args.output_xp
     if args.debug:             task_config["debug_mode"] = 1
+    if args.seed is not None:  task_config["seed"] = args.seed
     if args.threads is not None: task_config["n_threads"] = args.threads
     if args.scl is not None: task_config["character_set"]["single_char_length"] = args.scl
     if args.types is not None:
@@ -307,10 +309,9 @@ def main():
         task_config["character_set"]["custom_values"] = args.custom_values
 
     # ── 5. 执行 ──
-    import os as _os
     n = task_config.get("n_threads", -1)
     if n == -1:
-        n = _os.cpu_count() or 4
+        n = os.cpu_count() or 4
     task_config["n_threads"] = n
 
     # stdout 模式: 使用临时目录 (引擎写文件, Python 读取后自动清理)

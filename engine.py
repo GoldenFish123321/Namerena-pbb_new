@@ -153,7 +153,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
     # 引擎路径
     if engine_bin is None:
         base = os.path.dirname(os.path.abspath(__file__))
-        engine_bin = os.path.join(base, "pbb_engine")
+        engine_bin = os.path.join(base, "build", "pbb_engine")
         if sys.platform == "win32":
             engine_bin += ".exe"
 

@@ -101,7 +101,7 @@ inline int engine_main(int argc,char**argv){
 
     // 打开输出文件
     std::string out_path="out/"+kv["result_file"];
-    FILE*fp=fopen(out_path.c_str(),"a");if(!fp)return 1;
+    FILE*fp=fopen(out_path.c_str(),"a");if(!fp){fprintf(stderr,"[engine] ERROR: cannot open %s\n",out_path.c_str());return 1;}
     FILE*fp_blue=nullptr;if(collect_mode>=1)fp_blue=fopen("out/blue.txt","a");  // mode 1/2 均收集
     FILE*flog=output_log?stderr:fopen("out/task_log.txt","a");
     FILE*fspeed=output_speed?stderr:fopen("out/speed_log.txt","a");
