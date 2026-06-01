@@ -60,23 +60,33 @@ for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
     fi
 done
 
-# ── 虚拟环境 ──
+# ── 虚拟环境 (Docker/容器内venv不可用时回退到系统python3) ──
+_use_venv=true
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."
-    python3 -m venv .venv || {
-        echo "ERROR: venv 创建失败, 请手动执行: python3 -m venv .venv" >&2
-        exit 1
+    python3 -m venv .venv 2>/dev/null || {
+        echo "[run] venv unavailable (Docker/container?), using system python3"
+        _use_venv=false
     }
-    # 安装 Python 依赖
+fi
+
+if $_use_venv; then
+    _python=".venv/bin/python3"
     _pip=".venv/bin/pip install --quiet"
+else
+    _python="python3"
+    _pip="pip install --quiet --break-system-packages"
+fi
+
+# 安装依赖 (仅首次 .venv 或 venv 不可用时)
+if [ ! -f .venv/bin/python3 ]; then
     $_pip pyyaml setuptools pybind11  || {
-        echo "WARNING: pip install 失败, 请检查网络 (国内可设镜像: pip config set global.index-url https://mirrors.sjtug.sjtu.edu.cn/pypi/web/simple)" >&2
+        echo "WARNING: pip install 失败, 请检查网络" >&2
     }
-    # Python < 3.11 需要 tomli
     if [ "$(python3 -c 'import sys; print(sys.version_info.minor)')" -lt 11 ]; then
         $_pip tomli 2>/dev/null || true
     fi
 fi
 
 # ── 启动 ──
-exec .venv/bin/python3 main.py "$@"
+exec $_python main.py "$@"
