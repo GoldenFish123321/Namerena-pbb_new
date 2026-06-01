@@ -82,8 +82,16 @@ if $_use_venv; then
     _python=".venv/bin/python3"
     _pip=".venv/bin/python3 -m pip install --quiet"
 else
-    _python="python3"
-    _pip="python3 -m pip install --quiet --break-system-packages"
+    echo ""
+    printf "[run] Install pyyaml,pybind11 to system Python? (y/n) "
+    read -r _ans
+    if [ "$_ans" = "y" ] || [ "$_ans" = "Y" ]; then
+        _python="python3"
+        _pip="python3 -m pip install --quiet --break-system-packages"
+    else
+        _python="python3"
+        _pip="echo '[run] Skipping system pip install'"
+    fi
 fi
 
 # 安装依赖
