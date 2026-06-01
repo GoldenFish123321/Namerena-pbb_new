@@ -60,13 +60,16 @@ for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
     fi
 done
 
-# ── 虚拟环境 (Docker/容器内venv不可用时回退到系统python3) ──
+# ── 虚拟环境 (venv不可用时尝试装python3-venv, 仍不行才回退系统python3) ──
 _use_venv=true
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."
     python3 -m venv .venv 2>/dev/null || {
-        echo "[run] venv unavailable (Docker/container?), using system python3"
-        _use_venv=false
+        echo "[run] venv failed, installing python3-venv..."
+        $_pkg python3-venv 2>/dev/null && python3 -m venv .venv 2>/dev/null || {
+            echo "[run] python3-venv unavailable, using system python3"
+            _use_venv=false
+        }
     }
 fi
 
