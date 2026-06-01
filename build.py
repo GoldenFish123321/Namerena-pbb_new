@@ -132,8 +132,8 @@ def _find_compilers(for_core=False):
         if icpx:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xHost", "-finline-functions"]
-            result.append((icpx, flags, "auto (-xHost)", False))
+                     "-qopenmp", "-xCORE-AVX2", "-finline-functions"]
+            result.append((icpx, flags, "AVX2", False))
         if shutil.which("g++"):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             simd_flags, simd_name = _detect_simd("g++")
