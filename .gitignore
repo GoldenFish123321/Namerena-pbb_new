@@ -28,7 +28,6 @@ Thumbs.db
 # Temp
 tmp_*
 *.tmp
-_setup_pbb.py
 
 #config
 config.json

@@ -67,20 +67,21 @@ def ensure_pbb_core(rebuild=False):
     extra_flags = _compile_flags()
     
     print("[build] Building pbb_core...", file=sys.stderr)
-    # 用子进程调用 setup.py (抑制所有编译输出)
-    setup_py = os.path.join(BASE_DIR, "_setup_pbb.py")
-    with open(setup_py, "w") as f:
-        f.write(f'''from pybind11.setup_helpers import Pybind11Extension, build_ext
-from setuptools import setup
-ext = Pybind11Extension("pbb_core", ["{os.path.join(BASE_DIR, 'src', 'bridge.cpp')}"],
-    cxx_std=17, include_dirs=["{os.path.join(BASE_DIR, 'src')}"],
-    extra_compile_args={extra_flags!r}, extra_link_args=[])
-setup(name="pbb_core", ext_modules=[ext], cmdclass={{"build_ext": build_ext}},
-    script_args=["build_ext", "--inplace"])
-''')
-    subprocess.run([sys.executable, setup_py],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    os.unlink(setup_py)
+    ext = Pybind11Extension(
+        "pbb_core",
+        [os.path.join(BASE_DIR, "src", "bridge.cpp")],
+        cxx_std=17,
+        include_dirs=[os.path.join(BASE_DIR, "src")],
+        extra_compile_args=extra_flags,
+        extra_link_args=[],
+    )
+    setup(
+        name="pbb_core",
+        version="1.0.0",
+        ext_modules=[ext],
+        cmdclass={"build_ext": build_ext},
+        script_args=["build_ext", "--inplace"],
+    )
 
 
 def _compile_flags():
