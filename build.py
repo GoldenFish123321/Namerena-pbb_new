@@ -48,9 +48,12 @@ def _compiler_probe(compiler, flag):
     src = tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False)
     src.write("int main(){return 0;}\n")
     src.close()
-    obj = src.name + ".o"
+    obj = src.name + (".obj" if "cl" in os.path.basename(compiler) else ".o")
+    is_msvc = os.path.basename(compiler).startswith("cl")
+    std_flag = "/std:c++17" if is_msvc else "-std=c++17"
     try:
-        r = subprocess.run([compiler, "-std=c++17", "-c", flag, src.name, "-o", obj],
+        r = subprocess.run([compiler, std_flag, "-c", flag, src.name,
+                            ("/Fo:" if is_msvc else "-o") + obj],
                            capture_output=True, timeout=15)
         return r.returncode == 0
     except:
@@ -62,9 +65,10 @@ def _compiler_probe(compiler, flag):
 
 def _detect_simd(compiler):
     """Returns (additional_flags, simd_name).
-    Cross-platform: Linux uses /proc/cpuinfo, Windows uses compiler probe.
+    Cross-platform: Linux uses /proc/cpuinfo, all platforms fall back to compiler probe.
     """
     is_win = sys.platform == "win32"
+    is_msvc = os.path.basename(compiler).startswith("cl")
 
     # ARM aarch64: NEON is mandatory, no flags needed
     if not is_win:
@@ -74,21 +78,29 @@ def _detect_simd(compiler):
             return ([], "NEON")
 
     # x86/x86_64: probe AVX-512 > AVX2
+    # MSVC uses /arch:AVX512 / /arch:AVX2, g++/icpx use -mavx512f / -mavx2
+    if is_msvc:
+        candidates = [
+            (["/arch:AVX512"], "AVX-512"),
+            (["/arch:AVX2"], "AVX2"),
+        ]
+    else:
+        candidates = [
+            (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
+            (["-mavx2", "-mfma"], "AVX2"),
+        ]
+
+    # Linux fast path via /proc/cpuinfo
     if not is_win:
-        # Linux: fast path via /proc/cpuinfo
         try:
             cpuinfo = open("/proc/cpuinfo").read().lower()
-            if "avx512f" in cpuinfo and "avx512bw" in cpuinfo:
-                return (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512")
-            if "avx2" in cpuinfo:
-                return (["-mavx2", "-mfma"], "AVX2")
+            for flags, name in candidates:
+                key = "avx512f" if "AVX-512" in name else "avx2"
+                if key in cpuinfo:
+                    return (flags, name)
         except: pass
 
-    # Fallback (including Windows g++/MinGW): compiler probe
-    candidates = [
-        (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
-        (["-mavx2", "-mfma"], "AVX2"),
-    ]
+    # Fallback: compiler probe
     for flags, name in candidates:
         if _compiler_probe(compiler, flags[0]):
             return (flags, name)
@@ -109,13 +121,12 @@ def _find_compiler():
     if icpx:
         flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                  "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
-        simd_name = "AVX2"
         if sys.platform == "win32":
-            flags += ["-xCORE-AVX2", "-qopenmp"]
+            flags += ["-qopenmp"]
         else:
-            flags += ["-xHost", "-finline-functions", "-lpthread"]
-            simd_name = "auto (-xHost)"
-        return (icpx, flags, simd_name, False)
+            flags += ["-lpthread"]
+        flags += ["-xHost", "-finline-functions"]  # -xHost auto-detects best SIMD
+        return (icpx, flags, "auto (-xHost)", False)
 
     if shutil.which("g++"):
         base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
@@ -123,7 +134,8 @@ def _find_compiler():
         return ("g++", base_flags + simd_flags, simd_name, False)
 
     if sys.platform == "win32" and shutil.which("cl"):
-        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w", "/arch:AVX2"], "AVX2", True)
+        simd_flags, simd_name = _detect_simd("cl")
+        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True)
 
     return None
 
