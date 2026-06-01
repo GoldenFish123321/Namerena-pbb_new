@@ -196,8 +196,13 @@ def _compile_pbb_core():
 
     last_err = ""
     for name, flags, simd_name, is_msvc in compilers:
+        # MinGW g++ on Windows: static link runtime to avoid missing DLL errors
+        extra_link = link[:]
+        if sys.platform == "win32" and not is_msvc and "g++" in str(name):
+            flags = flags + ["-static-libgcc", "-static-libstdc++"]
+
         cmd = _compile(name, flags, is_msvc, src, out,
-                       extra_includes=includes, extra_link=link, shared=True)
+                       extra_includes=includes, extra_link=extra_link, shared=True)
         print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
         print(f"[build] SIMD: {simd_name}", file=sys.stderr)
         r = subprocess.run(cmd, capture_output=True, text=True)
