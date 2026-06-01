@@ -78,7 +78,11 @@ def _detect_simd(compiler):
         candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
     elif is_icpx:
         # icpx -x flags: tune for specific Intel uarch + enable ISA
-        candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
+        # Windows: AVX2 only (AVX-512 causes LLVM crash on bridge.cpp + mixed-runtime issues)
+        if is_win:
+            candidates = [(["-xCORE-AVX2"], "AVX2")]
+        else:
+            candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
     else:
         candidates = [(["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
                       (["-mavx2", "-mfma"], "AVX2")]
@@ -147,12 +151,7 @@ def _find_compilers(for_core=False):
         simd_flags, simd_name = _detect_simd("cl")
         entries.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
 
-    # ---- Order: performance (icpx > g++ > cl), exception for pbb_core on Windows ----
-    if for_core and is_win and cl:
-        # pbb_core on Windows: cl must be first (Python ABI)
-        cl_entry   = [e for e in entries if e[0] == "cl"]
-        other      = [e for e in entries if e[0] != "cl"]
-        return cl_entry + other
+    # ---- Order: icpx > g++ > cl on all platforms ----
 
     return entries  # default: icpx > g++ > cl
 
@@ -209,7 +208,7 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
 def _compile_pbb_core():
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
-    compilers = _find_compilers(for_core=True)
+    compilers = _find_compilers()  # icpx > g++ > cl, same as engine
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
