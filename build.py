@@ -86,10 +86,20 @@ def ensure_pbb_core(rebuild=False):
 
 
 def _compile_flags():
-    """返回 pybind11 编译旗标 (Windows 上固定 MSVC, 因 setup() 总是用 cl.exe)."""
+    """返回 pybind11 编译旗标 (根据实际编译器选择)."""
     if sys.platform == "win32":
-        # setup() 在 Windows 上固定用 MSVC cl.exe, 不用 GNU 旗标
-        return ["/std:c++17", "/Ox", "/utf-8"]
+        # 探测 distutils 将使用哪个编译器
+        try:
+            from setuptools._distutils.ccompiler import new_compiler
+            cc = new_compiler()
+            if hasattr(cc, 'compiler_type') and cc.compiler_type == 'msvc':
+                return ["/std:c++17", "/Ox", "/utf-8"]
+        except Exception:
+            pass
+        # 回退: 有 cl.exe 用 MSVC 旗标, 否则用 GNU
+        if shutil.which("cl"):
+            return ["/std:c++17", "/Ox", "/utf-8"]
+        return ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
     flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
              "-fno-plt", "-fno-semantic-interposition"]
     if _detect_avx2():
