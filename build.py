@@ -95,11 +95,13 @@ def _detect_simd(compiler):
     return ([], "none")
 
 
-def _find_compilers():
-    """Returns list of (name, flags, simd_name, is_msvc) in priority order."""
+def _find_compilers(for_core=False):
+    """Returns list of (name, flags, simd_name, is_msvc) in priority order.
+    for_core=True: MSVC before g++ on Windows (Python ABI compatibility).
+    """
     result = []
 
-    # 1. icpx (Intel) — best optimization, engine only
+    # 1. icpx (Intel) — best optimization
     icpx = shutil.which("icpx")
     if not icpx:
         for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
@@ -118,16 +120,24 @@ def _find_compilers():
         flags += ["-xHost", "-finline-functions"]
         result.append((icpx, flags, "auto (-xHost)", False))
 
-    # 2. g++ (GCC/MinGW)
-    if shutil.which("g++"):
-        base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        simd_flags, simd_name = _detect_simd("g++")
-        result.append(("g++", base_flags + simd_flags, simd_name, False))
-
-    # 3. cl (MSVC)
-    if sys.platform == "win32" and shutil.which("cl"):
-        simd_flags, simd_name = _detect_simd("cl")
-        result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
+    # 2/3: MSVC before g++ for pbb_core (Python ABI), g++ before MSVC for engine
+    if for_core and sys.platform == "win32":
+        # pbb_core must match Python's compiler (MSVC)
+        if shutil.which("cl"):
+            simd_flags, simd_name = _detect_simd("cl")
+            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
+        if shutil.which("g++"):
+            base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+            simd_flags, simd_name = _detect_simd("g++")
+            result.append(("g++", base_flags + simd_flags, simd_name, False))
+    else:
+        if shutil.which("g++"):
+            base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+            simd_flags, simd_name = _detect_simd("g++")
+            result.append(("g++", base_flags + simd_flags, simd_name, False))
+        if sys.platform == "win32" and shutil.which("cl"):
+            simd_flags, simd_name = _detect_simd("cl")
+            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
 
     return result
 
@@ -184,7 +194,7 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
 def _compile_pbb_core():
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
-    compilers = _find_compilers()
+    compilers = _find_compilers(for_core=True)
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
@@ -217,12 +227,11 @@ def _compile_pbb_core():
 
 def _compile_engine():
     """Compile engine_main.cpp → pbb_engine. Uses first available compiler."""
-    compilers = _find_compilers()
+    compilers = _find_compilers()  # engine: g++ preferred over MSVC
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    # Engine: use the first (best) compiler
     name, flags, simd_name, is_msvc = compilers[0]
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
