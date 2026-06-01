@@ -266,7 +266,7 @@ inline int engine_main(int argc,char**argv){
         }};
 
     // 启动线程
-    fprintf(stderr,"[engine] creating %d threads...\n",n_threads+1);fflush(stderr);
+    fprintf(stderr,"[engine] creating 1 producer + %d consumers...\n",n_threads);fflush(stderr);
     std::thread pt(prod);std::vector<std::thread>cts;
     for(int i=0;i<n_threads;i++)cts.emplace_back(cons,i);
     fprintf(stderr,"[engine] all threads running\n");fflush(stderr);
