@@ -53,7 +53,7 @@ def _compiler_probe(compiler, flag):
     try:
         r = subprocess.run([compiler, std_flag, "-c", flag, src.name,
                             ("/Fo:" if is_msvc else "-o") + obj],
-                           capture_output=True, timeout=15)
+                           capture_output=True, timeout=15, encoding='utf-8', errors='replace')
         return r.returncode == 0
     except:
         return False
@@ -159,7 +159,7 @@ def _py_link_flags():
     flags = [f"-L{libdir}"] + ldflags.split()
     try:
         pyld = subprocess.run(["python3-config", "--ldflags", "--embed"],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding='utf-8', errors='replace')
         if pyld.returncode == 0 and "-lpython" in pyld.stdout:
             flags += pyld.stdout.strip().split()
     except: pass
@@ -215,7 +215,7 @@ def _compile_pbb_core():
                        extra_includes=includes, extra_link=extra_link, shared=True)
         print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
         print(f"[build] SIMD: {simd_name}", file=sys.stderr)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return  # success
         last_err = r.stderr
@@ -240,7 +240,7 @@ def _compile_engine():
     cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
     print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
     print(f"[build] SIMD: {simd_name}", file=sys.stderr)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
         sys.exit(1)
