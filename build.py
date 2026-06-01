@@ -132,10 +132,8 @@ def _find_compilers(for_core=False):
     if icpx:
         if is_win:
             simd_flags, simd_name = _detect_simd("icpx")
-            # -ipo removed: known to crash on Arrow Lake with -xCORE-AVX512 (pre-main illegal instruction)
-            flags = ["-std=c++17", "-w", "-O3", "-ffast-math",
-                     "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-finline-functions"] + simd_flags
+            # Minimal: Arrow Lake debugging — strip exotic flags to find crash culprit
+            flags = ["-std=c++17", "-O3"] + simd_flags
             entries.append((icpx, flags, simd_name, False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
