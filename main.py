@@ -130,7 +130,12 @@ def main():
         task_config["character_set"]["custom_values"] = args.custom_values
 
     # ── 5. 执行 ──
-    print(f"[main] Threads: {task_config['n_threads']}, Mode: {task_config['mode']}", file=sys.stderr)
+    import os as _os
+    n = task_config.get("n_threads", -1)
+    if n == -1:
+        n = _os.cpu_count() or 4
+    task_config["n_threads"] = n
+    print(f"[main] Threads: {n}, Mode: {task_config['mode']}", file=sys.stderr)
     t0 = time.time()
     result = run_engine(task_config, engine_bin, out_dir=".")
     elapsed = time.time() - t0
