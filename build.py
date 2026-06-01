@@ -93,7 +93,7 @@ def _compile_flags():
             from setuptools._distutils.ccompiler import new_compiler
             cc = new_compiler()
             if hasattr(cc, 'compiler_type') and cc.compiler_type == 'msvc':
-                return ["/std:c++17", "/Ox", "/utf-8"]
+                return ["/std:c++17", "/Ox", "/utf-8", "/w"]
         except Exception:
             pass
         # 回退: 有 cl.exe 用 MSVC 旗标, 否则用 GNU
@@ -171,7 +171,7 @@ def build_engine(rebuild=False):
         cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
     elif sys.platform == "win32" and shutil.which("cl"):
         # MSVC (Windows only)
-        flags = ["/std:c++17", "/Ox", "/EHsc", "/utf-8"]
+        flags = ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"]
         cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
     else:
         print("ERROR: 未找到 C++ 编译器 (icpx / g++ / MSVC cl).", file=sys.stderr)

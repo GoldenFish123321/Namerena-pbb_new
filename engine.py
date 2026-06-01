@@ -173,7 +173,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None) -> dict:
         mxp, mxd = 0, 0
         result_path = os.path.join(result_dir, "result.txt")
         if os.path.exists(result_path):
-            with open(result_path) as f:
+            with open(result_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line: continue
