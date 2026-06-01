@@ -112,16 +112,19 @@ else
     fi
 fi
 
-# 安装依赖
+# ── pip (Python 包管理器) ──
 if ! python3 -m pip --version >/dev/null 2>&1; then
-    echo "[run] pip not available. Install with: apt install python3-pip" >&2
-    echo "[run] Or ensure deps are pre-installed: python3 -m ensurepip" >&2
+    echo "[run] pip not available."
+    if _confirm "Install python3-pip?"; then
+        $_pkg python3-pip
+    else
+        echo "[run] pip required for Python deps, aborting."; exit 1
+    fi
 fi
+
+# 安装依赖
 $_pip pyyaml setuptools pybind11 2>/dev/null || {
     echo "WARNING: pip install 失败, 请检查网络" >&2
-    if ! $_use_venv && ! python3 -m pip --version >/dev/null 2>&1; then
-        echo "[run]   Hint: apt install python3-pip python3-venv"
-    fi
 }
 _py_minor=$(python3 -c "import sys; print(sys.version_info.minor)")
 if [ "$_py_minor" -lt 11 ]; then
