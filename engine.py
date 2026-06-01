@@ -79,8 +79,8 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
     sfx = config.get("suffixes", "")
     if isinstance(pfx, list): pfx = ",".join(pfx)
     if isinstance(sfx, list): sfx = ",".join(sfx)
-    pfx = ",".join("" if x.strip() == "+" else x.strip() for x in pfx.split(",") if x)
-    sfx = ",".join("" if x.strip() == "+" else x.strip() for x in sfx.split(",") if x)
+    pfx = ",".join("" if x.strip() == "+" else x.strip() for x in pfx.split(","))
+    sfx = ",".join("" if x.strip() == "+" else x.strip() for x in sfx.split(","))
     if not pfx: pfx = ""
     if not sfx: sfx = ""
 
