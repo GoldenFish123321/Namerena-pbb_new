@@ -87,11 +87,13 @@ def _py_include():
 
 def _py_link_flags():
     """Python linkage."""
-    libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "libs")
-    ldflags = sysconfig.get_config_var("LDFLAGS") or ""
     if sys.platform == "win32":
         ver = f"{sys.version_info.major}{sys.version_info.minor}"
-        return [f"/LIBPATH:{libdir}", f"python{ver}.lib"]
+        libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "libs")
+        lib = os.path.join(libdir, f"python{ver}.lib")
+        return [lib] if os.path.exists(lib) else [f"/LIBPATH:{libdir}", f"python{ver}.lib"]
+    libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "lib")
+    ldflags = sysconfig.get_config_var("LDFLAGS") or ""
     return [f"-L{libdir}"] + ldflags.split()
 
 
@@ -114,7 +116,9 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
         for d in extra_includes:
             cmd += [f"-I{d}"]
         if shared:
-            cmd += ["-shared", "-fPIC"]
+            cmd += ["-shared"]
+            if sys.platform != "win32":
+                cmd += ["-fPIC"]
         cmd += ["-o", out, src]
         cmd += extra_link
     return cmd
