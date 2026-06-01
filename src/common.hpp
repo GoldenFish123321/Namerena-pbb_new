@@ -31,6 +31,17 @@
 // 是否存在任意 SIMD 后端
 #define PBB_HAS_SIMD (PBB_HAS_AVX2 || PBB_HAS_AVX512 || PBB_HAS_NEON)
 
+// SIMD 名称字符串 (编译期确定)
+#if PBB_HAS_AVX512
+  #define PBB_SIMD_NAME "AVX-512"
+#elif PBB_HAS_AVX2
+  #define PBB_SIMD_NAME "AVX2"
+#elif PBB_HAS_NEON
+  #define PBB_SIMD_NAME "NEON"
+#else
+  #define PBB_SIMD_NAME "none"
+#endif
+
 // Windows CRT 安全警告
 #if defined(_WIN32) || defined(_WIN64)
   #ifndef _CRT_SECURE_NO_WARNINGS

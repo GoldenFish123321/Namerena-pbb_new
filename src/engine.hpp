@@ -81,6 +81,7 @@ inline int engine_main(int argc,char**argv){
     FILE*fp_blue=nullptr;if(collect_mode>=1)fp_blue=fopen("out/blue.txt","a");  // mode 1/2 均收集
     FILE*flog=output_log?stderr:fopen("out/task_log.txt","a");
     FILE*fspeed=output_speed?stderr:fopen("out/speed_log.txt","a");
+    fprintf(flog,"[engine] SIMD: %s\n",PBB_SIMD_NAME);fflush(flog);
 
     // 初始化 Name 状态机 (队伍名 KSA)
     Name name_init;name_init.load_team(team.c_str());

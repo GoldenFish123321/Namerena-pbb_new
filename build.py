@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PBB build script — compile pbb_core (.so/.pyd) + pbb_engine (executable)."""
-import os, sys, glob, subprocess, shutil, sysconfig
+import os, sys, glob, subprocess, shutil, sysconfig, tempfile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIRED_PY = (3, 8)
@@ -43,8 +43,61 @@ def _pbb_core_exists():
                 glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")))
 
 
+def _compiler_probe(compiler, flag):
+    """Test if compiler accepts a SIMD flag. Returns True if the flag works."""
+    src = tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False)
+    src.write("int main(){return 0;}\n")
+    src.close()
+    obj = src.name + ".o"
+    try:
+        r = subprocess.run([compiler, "-std=c++17", "-c", flag, src.name, "-o", obj],
+                           capture_output=True, timeout=15)
+        return r.returncode == 0
+    except:
+        return False
+    finally:
+        for f in [src.name, obj]:
+            if os.path.exists(f): os.unlink(f)
+
+
+def _detect_simd(compiler):
+    """Returns (additional_flags, simd_name).
+    Cross-platform: Linux uses /proc/cpuinfo, Windows uses compiler probe.
+    """
+    is_win = sys.platform == "win32"
+
+    # ARM aarch64: NEON is mandatory, no flags needed
+    if not is_win:
+        import platform
+        machine = platform.machine()
+        if machine.startswith("aarch") or machine.startswith("arm"):
+            return ([], "NEON")
+
+    # x86/x86_64: probe AVX-512 > AVX2
+    if not is_win:
+        # Linux: fast path via /proc/cpuinfo
+        try:
+            cpuinfo = open("/proc/cpuinfo").read().lower()
+            if "avx512f" in cpuinfo and "avx512bw" in cpuinfo:
+                return (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512")
+            if "avx2" in cpuinfo:
+                return (["-mavx2", "-mfma"], "AVX2")
+        except: pass
+
+    # Fallback (including Windows g++/MinGW): compiler probe
+    candidates = [
+        (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
+        (["-mavx2", "-mfma"], "AVX2"),
+    ]
+    for flags, name in candidates:
+        if _compiler_probe(compiler, flags[0]):
+            return (flags, name)
+
+    return ([], "none")
+
+
 def _find_compiler():
-    """返回 (compiler_name, flags, is_msvc) 或 None."""
+    """返回 (compiler_name, flags, simd_name, is_msvc) 或 None."""
     icpx = shutil.which("icpx")
     if not icpx:
         for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
@@ -56,32 +109,21 @@ def _find_compiler():
     if icpx:
         flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                  "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
+        simd_name = "AVX2"
         if sys.platform == "win32":
             flags += ["-xCORE-AVX2", "-qopenmp"]
         else:
             flags += ["-xHost", "-finline-functions", "-lpthread"]
-        return (icpx, flags, False)
+            simd_name = "auto (-xHost)"
+        return (icpx, flags, simd_name, False)
 
     if shutil.which("g++"):
-        flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        if sys.platform != "win32":
-            import platform
-            machine = platform.machine()
-            # ARM aarch64: NEON 默认开启
-            if machine.startswith("aarch") or machine.startswith("arm"):
-                pass  # NEON 是 aarch64 强制特性
-            else:
-                try:
-                    cpuinfo = open("/proc/cpuinfo").read().lower()
-                    if "avx512f" in cpuinfo and "avx512bw" in cpuinfo:
-                        flags += ["-mavx512f", "-mavx512bw", "-mfma"]
-                    elif "avx2" in cpuinfo:
-                        flags += ["-mavx2", "-mfma"]
-                except: pass
-        return ("g++", flags, False)
+        base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        simd_flags, simd_name = _detect_simd("g++")
+        return ("g++", base_flags + simd_flags, simd_name, False)
 
     if sys.platform == "win32" and shutil.which("cl"):
-        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w", "/arch:AVX2"], True)
+        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w", "/arch:AVX2"], "AVX2", True)
 
     return None
 
@@ -90,7 +132,6 @@ def _py_include():
     """Python C API include dirs."""
     inc = sysconfig.get_config_var("INCLUDEPY")
     if inc: return [inc]
-    # fallback
     return [os.path.join(sys.prefix, "include")]
 
 
@@ -104,9 +145,8 @@ def _py_link_flags():
     libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "lib")
     ldflags = sysconfig.get_config_var("LDFLAGS") or ""
     flags = [f"-L{libdir}"] + ldflags.split()
-    # Termux Python 3.13: sysconfig LDFLAGS 缺 -lpython, 用 python3-config 补
+    # Termux/Android: sysconfig LDFLAGS may be missing -lpython
     try:
-        import subprocess
         pyld = subprocess.run(["python3-config", "--ldflags", "--embed"],
                               capture_output=True, text=True)
         if pyld.returncode == 0 and "-lpython" in pyld.stdout:
@@ -150,7 +190,7 @@ def _compile_pbb_core():
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags, is_msvc = cc
+    name, flags, simd_name, is_msvc = cc
     src = os.path.join(BASE_DIR, "src", "bridge.cpp")
     out = _pbb_core_path()
     includes = [os.path.join(BASE_DIR, "src"),
@@ -160,6 +200,7 @@ def _compile_pbb_core():
     cmd = _compile(name, flags, is_msvc, src, out,
                    extra_includes=includes, extra_link=link, shared=True)
     print(f"[build] pbb_core: {' '.join(cmd)}", file=sys.stderr)
+    print(f"[build] SIMD: {simd_name}", file=sys.stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
@@ -172,13 +213,14 @@ def _compile_engine():
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags, is_msvc = cc
+    name, flags, simd_name, is_msvc = cc
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
     includes = [os.path.join(BASE_DIR, "src")]
 
     cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
     print(f"[build] engine: {' '.join(cmd)}", file=sys.stderr)
+    print(f"[build] SIMD: {simd_name}", file=sys.stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
