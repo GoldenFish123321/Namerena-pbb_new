@@ -99,6 +99,7 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
         f"output_xp={config.get('output_xp', 1)}\n"
         f"output_log={config.get('output_log', 1)}\n"
         f"output_speed={config.get('output_speed', 1)}\n"
+        f"debug_mode={config.get('debug_mode', 0)}\n"
         f"result_file={result_file}\n"
     )
     # A1: seed 传递 (config 有 seed 才传; 缺失则引擎用时间熵, 单机行为不变)

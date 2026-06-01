@@ -4,7 +4,7 @@
   "_comment_threads": "或: python3 main.py -c test-config.json --threads 8",
 
   "debug_mode": 0,
-  "_comment_debug_mode": "[已废弃] 引擎忽略此配置",
+  "_comment_debug_mode": "debug 诊断输出: 0=关闭 1=开启 (引擎逐步输出 checkpoint 到 stderr)",
 
   "team_name": "test",
   "_comment_team_name": "队伍名, 任意 UTF-8 字符串 (输入 '@' 使用自定义编码)",

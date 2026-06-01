@@ -112,6 +112,7 @@ python3 main.py -c config.yaml \
 | `--output-xp` | `output.output_xp` | `--output-xp 1` |
 | `-o` / `--output-file` | `output.result_file` | `-o myrun.txt` / `-o +` |
 | `-O` / `--output-dest` | (无) 控制输出位置 | `-O stdout` / `-O both` |
+| `--debug` | `debug_mode` | 引擎诊断输出 |
 | `--scl` | `character_set.single_char_length` | `--scl 3` |
 | `--types` | `character_set.types` | `--types 1,7` |
 | `--custom-values` | `character_set.custom_values` | `--custom-values "你好"` |
