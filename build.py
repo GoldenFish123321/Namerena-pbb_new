@@ -33,7 +33,6 @@ def _engine_bin():
 
 
 def _pbb_core_path():
-    """pbb_core 输出路径 (pbb_core<ext>)"""
     ext = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if sys.platform == "win32" else ".so")
     return os.path.join(BASE_DIR, "pbb_core" + ext)
 
@@ -64,33 +63,22 @@ def _compiler_probe(compiler, flag):
 
 
 def _detect_simd(compiler):
-    """Returns (additional_flags, simd_name).
-    Cross-platform: Linux uses /proc/cpuinfo, all platforms fall back to compiler probe.
-    """
+    """Returns (additional_flags, simd_name)."""
     is_win = sys.platform == "win32"
     is_msvc = os.path.basename(compiler).startswith("cl")
 
-    # ARM aarch64: NEON is mandatory, no flags needed
     if not is_win:
         import platform
         machine = platform.machine()
         if machine.startswith("aarch") or machine.startswith("arm"):
             return ([], "NEON")
 
-    # x86/x86_64: probe AVX-512 > AVX2
-    # MSVC uses /arch:AVX512 / /arch:AVX2, g++/icpx use -mavx512f / -mavx2
     if is_msvc:
-        candidates = [
-            (["/arch:AVX512"], "AVX-512"),
-            (["/arch:AVX2"], "AVX2"),
-        ]
+        candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
     else:
-        candidates = [
-            (["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
-            (["-mavx2", "-mfma"], "AVX2"),
-        ]
+        candidates = [(["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
+                      (["-mavx2", "-mfma"], "AVX2")]
 
-    # Linux fast path via /proc/cpuinfo
     if not is_win:
         try:
             cpuinfo = open("/proc/cpuinfo").read().lower()
@@ -100,7 +88,6 @@ def _detect_simd(compiler):
                     return (flags, name)
         except: pass
 
-    # Fallback: compiler probe
     for flags, name in candidates:
         if _compiler_probe(compiler, flags[0]):
             return (flags, name)
@@ -108,8 +95,11 @@ def _detect_simd(compiler):
     return ([], "none")
 
 
-def _find_compiler():
-    """返回 (compiler_name, flags, simd_name, is_msvc) 或 None."""
+def _find_compilers():
+    """Returns list of (name, flags, simd_name, is_msvc) in priority order."""
+    result = []
+
+    # 1. icpx (Intel) — best optimization, engine only
     icpx = shutil.which("icpx")
     if not icpx:
         for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
@@ -125,30 +115,30 @@ def _find_compiler():
             flags += ["-qopenmp"]
         else:
             flags += ["-lpthread"]
-        flags += ["-xHost", "-finline-functions"]  # -xHost auto-detects best SIMD
-        return (icpx, flags, "auto (-xHost)", False)
+        flags += ["-xHost", "-finline-functions"]
+        result.append((icpx, flags, "auto (-xHost)", False))
 
+    # 2. g++ (GCC/MinGW)
     if shutil.which("g++"):
         base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         simd_flags, simd_name = _detect_simd("g++")
-        return ("g++", base_flags + simd_flags, simd_name, False)
+        result.append(("g++", base_flags + simd_flags, simd_name, False))
 
+    # 3. cl (MSVC)
     if sys.platform == "win32" and shutil.which("cl"):
         simd_flags, simd_name = _detect_simd("cl")
-        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True)
+        result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
 
-    return None
+    return result
 
 
 def _py_include():
-    """Python C API include dirs."""
     inc = sysconfig.get_config_var("INCLUDEPY")
     if inc: return [inc]
     return [os.path.join(sys.prefix, "include")]
 
 
 def _py_link_flags():
-    """Python linkage."""
     if sys.platform == "win32":
         ver = f"{sys.version_info.major}{sys.version_info.minor}"
         libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "libs")
@@ -157,7 +147,6 @@ def _py_link_flags():
     libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "lib")
     ldflags = sysconfig.get_config_var("LDFLAGS") or ""
     flags = [f"-L{libdir}"] + ldflags.split()
-    # Termux/Android: sysconfig LDFLAGS may be missing -lpython
     try:
         pyld = subprocess.run(["python3-config", "--ldflags", "--embed"],
                               capture_output=True, text=True)
@@ -169,13 +158,11 @@ def _py_link_flags():
 
 def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
              shared=False):
-    """统一的编译函数."""
     if is_msvc:
         cmd = [name] + flags
         for d in extra_includes:
             cmd.append(f"/I{d}")
-        if shared:
-            cmd.append("/LD")
+        if shared: cmd.append("/LD")
         cmd.append(src)
         if shared:
             cmd += ["/link"] + extra_link + [f"/OUT:{out}"]
@@ -195,43 +182,49 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
 
 
 def _compile_pbb_core():
-    """直接用 _find_compiler() 编译 bridge.cpp → pbb_core.{so,pyd}."""
+    """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
-    cc = _find_compiler()
-    if not cc:
+    compilers = _find_compilers()
+    if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags, simd_name, is_msvc = cc
     src = os.path.join(BASE_DIR, "src", "bridge.cpp")
     out = _pbb_core_path()
-    includes = [os.path.join(BASE_DIR, "src"),
-                pybind11.get_include()] + _py_include()
+    includes = [os.path.join(BASE_DIR, "src"), pybind11.get_include()] + _py_include()
     link = _py_link_flags()
 
-    cmd = _compile(name, flags, is_msvc, src, out,
-                   extra_includes=includes, extra_link=link, shared=True)
-    print(f"[build] pbb_core: {' '.join(cmd)}", file=sys.stderr)
-    print(f"[build] SIMD: {simd_name}", file=sys.stderr)
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
-        sys.exit(1)
+    last_err = ""
+    for name, flags, simd_name, is_msvc in compilers:
+        cmd = _compile(name, flags, is_msvc, src, out,
+                       extra_includes=includes, extra_link=link, shared=True)
+        print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
+        print(f"[build] SIMD: {simd_name}", file=sys.stderr)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            return  # success
+        last_err = r.stderr
+        print(f"[build] {name} failed, trying next compiler ...", file=sys.stderr)
+
+    print(f"[build] All compilers failed:\n{last_err[-1000:]}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _compile_engine():
-    cc = _find_compiler()
-    if not cc:
+    """Compile engine_main.cpp → pbb_engine. Uses first available compiler."""
+    compilers = _find_compilers()
+    if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags, simd_name, is_msvc = cc
+    # Engine: use the first (best) compiler
+    name, flags, simd_name, is_msvc = compilers[0]
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
     includes = [os.path.join(BASE_DIR, "src")]
 
     cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
-    print(f"[build] engine: {' '.join(cmd)}", file=sys.stderr)
+    print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
     print(f"[build] SIMD: {simd_name}", file=sys.stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
