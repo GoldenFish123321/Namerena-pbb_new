@@ -78,7 +78,11 @@ def _detect_simd(compiler):
         candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
     elif is_icpx:
         # icpx -x flags: tune for specific Intel uarch + enable ISA
-        candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
+        # Windows: skip AVX-512 on Arrow Lake (pre-main illegal instruction with -xCORE-AVX512)
+        if is_win:
+            candidates = [(["-xCORE-AVX2"], "AVX2")]
+        else:
+            candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
     else:
         candidates = [(["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
                       (["-mavx2", "-mfma"], "AVX2")]
