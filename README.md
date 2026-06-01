@@ -94,7 +94,7 @@ python3 main.py -c config.yaml \
   --collect-mode 2 \
   --output-xp 1 \
   -o myrun.txt \                 # 输出文件名 (可选: + 随机, - 时间戳)
-  -O both \                      # 输出目标 (可选: file/stdout/both)
+  --output-dest both \            # 输出目标 (可选: file/stdout/both)
   --scl 3 --types 7 --custom-values "你好世界"
 ```
 
@@ -112,7 +112,7 @@ python3 main.py -c config.yaml \
 | `--collect-mode` | `collection.collect_mode` | `--collect-mode 2` |
 | `--output-xp` | `output.output_xp` | `--output-xp 1` |
 | `-o` / `--output-file` | `output.result_file` | `-o myrun.txt` / `-o +` |
-| `-O` / `--output-dest` | (无) 控制输出位置 | `-O stdout` / `-O both` |
+| `--output-dest` | (无) 控制输出位置 | `--output-dest stdout` / `--output-dest both` |
 | `--debug` | `debug_mode` | 引擎诊断输出 |
 | `--scl` | `character_set.single_char_length` | `--scl 3` |
 | `--types` | `character_set.types` | `--types 1,7` |
@@ -182,7 +182,7 @@ tot=17, (741,5615,5933),time: 28.54s, speed: 0.3027T/d,time left:0h0m0s
 
 ### 输出目标
 
-`--output-dest` (`-O`) 控制结果输出位置：
+`--output-dest` 控制结果输出位置：
 
 | 值 | 行为 |
 |----|------|

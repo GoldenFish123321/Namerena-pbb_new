@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--collect-mode", type=int, choices=[0,1,2], help="覆盖: collection.collect_mode")
     parser.add_argument("--output-xp", type=int, choices=[0,1], help="覆盖: output.output_xp")
     parser.add_argument("-o", "--output-file", help="覆盖: output.result_file (+ =随机, - =时间戳, 其他=自定义)")
-    parser.add_argument("-O", "--output-dest", choices=["file", "stdout", "both"], default=None,
+    parser.add_argument("--output-dest", choices=["file", "stdout", "both"], default=None,
                         help="输出目标: file=仅文件(默认) stdout=仅终端 both=文件+终端")
     parser.add_argument("--debug", action="store_true", help="启用引擎 debug 诊断输出")
     parser.add_argument("--scl", type=int, choices=[1,2,3,4], help="覆盖: character_set.single_char_length")
