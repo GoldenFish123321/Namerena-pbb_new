@@ -131,10 +131,12 @@ def _find_compilers(for_core=False):
 
     if icpx:
         if is_win:
+            # -xHost still crashes on Arrow Lake (LLVM bug in bridge.cpp).
+            # -xCORE-AVX2 is the only stable choice for both pbb_core and engine.
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xHost"]
-            entries.append((icpx, flags, "auto (-xHost)", False))
+                     "-qopenmp", "-xCORE-AVX2"]
+            entries.append((icpx, flags, "AVX2", False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
@@ -207,7 +209,10 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
 def _compile_pbb_core():
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
-    compilers = _find_compilers()  # icpx > g++ > cl, same as engine
+    compilers = _find_compilers()  # icpx > g++ > cl
+    # Windows: skip g++ for pbb_core (MinGW ABI incompatible with MSVC Python)
+    if sys.platform == "win32":
+        compilers = [c for c in compilers if "g++" not in str(c[0])]
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
