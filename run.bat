@@ -3,6 +3,14 @@
 REM PBB Name Scoring Tester — One-click launcher (Windows)
 cd /d "%~dp0"
 
+REM ---- Intel oneAPI (auto-source if installed) ----
+for %%d in ("C:\Program Files (x86)\Intel\oneAPI" "C:\Program Files\Intel\oneAPI") do (
+    if exist "%%~d\setvars.bat" (
+        echo [run] Intel oneAPI found, loading ...
+        call "%%~d\setvars.bat" >nul 2>&1
+    )
+)
+
 REM ---- Find Python ----
 set PYTHON=
 where uv >nul 2>&1 && set HAS_UV=1
