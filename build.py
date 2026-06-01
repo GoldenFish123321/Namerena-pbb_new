@@ -130,7 +130,7 @@ def _find_compilers(for_core=False):
             simd_flags, simd_name = _detect_simd("icpx")
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-finline-functions"] + simd_flags
+                     "-qopenmp"] + simd_flags
             entries.append((icpx, flags, simd_name, False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
