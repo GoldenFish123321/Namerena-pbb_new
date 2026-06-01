@@ -108,8 +108,12 @@ def ensure_all(rebuild=False):
 
     if rebuild or not _pbb_core_exists():
         print("[build] pbb_core ...", file=sys.stderr)
+        env = os.environ.copy()
+        cc = _find_compiler()
+        if cc and cc[0] == "icpx":
+            env["CC"] = env["CXX"] = "icpx"
         subprocess.run([sys.executable, os.path.join(BASE_DIR, "setup.py"),
-                        "build_ext", "--inplace"], check=True)
+                        "build_ext", "--inplace"], check=True, env=env)
 
     if rebuild or not os.path.exists(_engine_bin()):
         _compile_engine()
