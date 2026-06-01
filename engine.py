@@ -133,6 +133,11 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
     if "charset_hex" in config:
         charset_hex = config["charset_hex"]
     else:
+        # pbb_core 在 build/ 目录
+        import sys as _sys
+        _build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build")
+        if _build_dir not in _sys.path:
+            _sys.path.insert(0, _build_dir)
         import pbb_core
         pbb_core.init_exhanzi()
         charset_hex = _build_charset(config["character_set"])
