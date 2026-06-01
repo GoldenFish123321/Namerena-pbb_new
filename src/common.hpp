@@ -1,11 +1,11 @@
 #pragma once
 // ============================================================================
-// common.hpp — 类型别名、全局常量
+// common.hpp — type aliases, global constants
 //
-// PBB 核心基础设施。AVX2 由编译器 -mavx2 标志控制 (Python 自动检测)。
+// PBB core infrastructure. AVX2 controlled by compiler -mavx2 flag.
 // ============================================================================
 
-// AVX2: 编译器传 -mavx2 时定义 __AVX2__, Python build_engine() 自动检测
+// AVX2: compiler passes -mavx2 to define __AVX2__
 #if defined(__AVX2__)
   #include <immintrin.h>
   #define PBB_HAS_AVX2 1
@@ -41,15 +41,15 @@
 #include <string>
 #include <vector>
 
-// ===== 类型别名 =====
+// ===== Type aliases =====
 typedef unsigned long long u64_t;
 typedef unsigned char u8_t;
 
-// ===== 全局常量 =====
-const int N = 256;        // RC4 S-box 大小
-const int M = 128;        // name_base 大小
-const int K = 64;         // 技能分组偏移
-const int skill_cnt = 40; // 技能总数
+// ===== Global constants =====
+const int N = 256;        // RC4 S-box size
+const int M = 128;        // name_base size
+const int K = 64;         // skill group offset
+const int skill_cnt = 40; // total skills
 
 // 技能名称映射 (0-34 有效, 35-39 占位)
 // 索引: 11=魅惑 16=蓄力 21=护盾 23=分身 24=隐匿 28=护身符 32=潜行 34=治愈

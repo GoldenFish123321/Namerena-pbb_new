@@ -88,10 +88,10 @@ def ensure_pbb_core(rebuild=False):
 def _compile_flags():
     """返回当前平台的编译旗标 (pybind11 和 standalone 引擎共用)."""
     if sys.platform == "win32":
-        # Windows: MSVC cl 用 /Ox, icpx/g++ 用 -O3
+        # Windows: MSVC cl 用 /Ox /utf-8, icpx/g++ 用 -O3
         if shutil.which("icpx") or shutil.which("g++"):
             return ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        return ["/std:c++17", "/Ox"]
+        return ["/std:c++17", "/Ox", "/utf-8"]
     flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
              "-fno-plt", "-fno-semantic-interposition"]
     if _detect_avx2():
@@ -162,8 +162,8 @@ def build_engine(rebuild=False):
             flags.extend(["-mavx2", "-mfma"])
         cmd = ["g++"] + flags + ["-Isrc", "-o", bin_path, main_cpp]
     elif sys.platform == "win32" and shutil.which("cl"):
-        # MSVC (Windows 专有)
-        flags = ["/std:c++17", "/Ox", "/EHsc"]
+        # MSVC (Windows only)
+        flags = ["/std:c++17", "/Ox", "/EHsc", "/utf-8"]
         cmd = ["cl"] + flags + [f"/I{src_dir}", f"/Fe:{bin_path}", main_cpp]
     else:
         print("ERROR: 未找到 C++ 编译器 (icpx / g++ / MSVC cl).", file=sys.stderr)

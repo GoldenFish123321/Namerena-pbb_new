@@ -8,7 +8,6 @@ set PYTHON=
 where uv >nul 2>&1 && set HAS_UV=1
 
 if defined HAS_UV (
-    REM Find system Python via uv (skip venv pythons)
     for /f "delims=" %%i in ('uv python find --no-project 2^>nul') do (
         if not defined PYTHON set PYTHON=%%i
     )
@@ -62,9 +61,7 @@ if not exist ".venv\Scripts\python.exe" (
         )
         echo [run] Installing deps with pip ...
         .venv\Scripts\pip install pyyaml setuptools pybind11
-        if errorlevel 1 (
-            echo WARNING: pip install failed.
-        )
+        if errorlevel 1 (echo WARNING: pip install failed. )
         python -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>nul
         if errorlevel 1 .venv\Scripts\pip install tomli
     )
