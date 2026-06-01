@@ -15,7 +15,7 @@
       "_comment": "前缀内容, '+' 表示无前缀"
     }
   ],
-  "_comment_prefixes": "每个前缀独立枚举, 可添加多个前缀并发",
+  "_comment_prefixes": "前缀列表。mode 1: 每个 prefix 遍历完整 range(名数=prefix数×range); mode 2/3/4: 每个 chunk 随机选一个 prefix(只扩大随机池, 不翻倍)",
 
   "suffixes": [
     {

@@ -12,12 +12,12 @@ debug_mode: 0
 # 队伍名, 任意 UTF-8 字符串 (输入 '@' 使用自定义编码)
 team_name: test
 
-# 前缀列表: 每个前缀独立枚举, 可添加多个并发
+# 前缀列表。mode 1: 每个 prefix 遍历完整 range(名数=prefix数×range); mode 2/3/4: 每个 chunk 随机选一个 prefix(只扩大随机池, 不翻倍)
 #   name: 前缀内容, '+' = 无前缀
 prefixes:
 - name: test-
 
-# 后缀列表: 每个后缀与每个前缀配对
+# 后缀列表。mode 1: 按 prefix index 轮转配对; mode 2/3: 每个 chunk 随机选; mode 4: 与 prefix 配对
 #   name: 后缀内容, '+' = 无后缀
 suffixes:
 - name: +

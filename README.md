@@ -81,6 +81,18 @@ threads:
 
 > mode 2/3/4 配合 `seed` 可实现**确定性随机**——同 seed + 同 range → 任意线程数下结果完全一致。
 
+### 前缀/后缀行为
+
+**mode 1 (顺序)**: 每个 prefix 遍历完整 range → 总名数 = `prefix 数 × range`。suffix 按 prefix index 轮转配对。
+
+**mode 2/3 (随机)**: 总 chunk 数 = `range / 1M`，每个 chunk **随机选一个 prefix 和 suffix**。多 prefix 只扩大随机池，不翻倍总次数。
+
+**mode 4 (随机+配对)**: suffix 与 prefix 配对（同 index），其余同 mode 2/3。
+
+例：3 个 prefix + 2 个 suffix + range=100M：
+- mode 1: 3 × 100 = 300 chunks，每个 prefix 跑 100 chunks
+- mode 2/3: 100 chunks，每个随机从 3×2=6 种 (prefix,suffix) 组合中选
+
 ## 字符集 type 对照
 
 | scl | type | 内容 |
