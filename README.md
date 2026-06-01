@@ -189,6 +189,32 @@ main.py (Python)               engine.hpp  引擎主循环
 CLI + 配置解析 + 调用 engine.run()
 ```
 
+### 两层并行与分布式预留
+
+项目本质是对整数区间 `[L, R)` 的纯函数遍历（`f(i) → score`，各 `i` 间零依赖），
+因此并行切分天然分两层：
+
+| 层 | 单位 | 切分者 | 大小 |
+|----|------|--------|------|
+| **chunk** | 引擎内部线程级 | `engine.hpp` producer | `CHUNK_SIZE` = 1M 名字 |
+| **task** | 分布式级 | 服务端 (规划中) | 服务端按更大粒度切总 range |
+
+`engine.run()` 已收敛为单机 / 服务端 / 客户端三方共用的统一入口：
+
+```python
+run(config, engine_bin=None, out_dir=None, result_file="result.txt")
+#   config 模式 A: 含 character_set → 内部构建字符集 (单机)
+#   config 模式 B: 含 charset_hex   → 直接使用 (服务端下发, 免重复构建)
+#   config["seed"]: 随机种子 (mode 2/3/4)
+#       None        → 时间熵 (单机默认, 每次结果不同)
+#       具体数值     → 确定性 (分布式: 同 seed + 同线程数 → 结果可复现/可去重)
+#   result_file: 多 task 并发同目录时传唯一名, 避免撞文件
+```
+
+> 随机 mode（2/3/4）的可复现性是分布式 task 超时回收重发的前提：
+> 服务端为每个 task 存固定 seed，重发时下发同一 seed，客户端产生相同名字集。
+
+
 ## 文件结构
 
 ```

@@ -69,8 +69,12 @@ def _build_charset(cs: dict) -> str:
     return bytes(buf).hex()
 
 
-def _build_params(config: dict, charset_hex: str) -> str:
-    """根据配置 + charset_hex 构建引擎 stdin 参数."""
+def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt") -> str:
+    """根据配置 + charset_hex 构建引擎 stdin 参数.
+
+    result_file: 引擎输出文件名 (相对 out/). 分布式多 task 并发时应传入唯一名,
+                 避免同目录撞文件 (如 f"result_{task_id}.txt").
+    """
     pfx = config.get("prefixes", "")
     sfx = config.get("suffixes", "")
     if isinstance(pfx, list): pfx = ",".join(pfx)
@@ -95,8 +99,11 @@ def _build_params(config: dict, charset_hex: str) -> str:
         f"output_xp={config.get('output_xp', 1)}\n"
         f"output_log={config.get('output_log', 1)}\n"
         f"output_speed={config.get('output_speed', 1)}\n"
-        f"result_file=result.txt\n"
+        f"result_file={result_file}\n"
     )
+    # A1: seed 传递 (config 有 seed 才传; 缺失则引擎用时间熵, 单机行为不变)
+    if config.get("seed") is not None:
+        params += f"seed={config['seed']}\n"
     if config.get("collect_mode") == 2:
         params += (
             f"c_eight_v_min={config.get('c_eight_v_min', 0)}\n"
@@ -107,14 +114,19 @@ def _build_params(config: dict, charset_hex: str) -> str:
     return params
 
 
-def run(config: dict, engine_bin: str = None, out_dir: str = None) -> dict:
+def run(config: dict, engine_bin: str = None, out_dir: str = None,
+        result_file: str = "result.txt") -> dict:
     """执行单个 task, 返回 {results, max_xp, max_xd, speed}.
 
     config 两种模式:
       模式 A: character_set -> 内部调 pbb_core 构建 charset
       模式 B: charset_hex     -> 直接使用 (服务端下发)
 
-    out_dir: 输出目录. None=临时目录(用完删除), "out"=保留.
+    config 可选键:
+      seed: 随机种子. None=引擎用时间熵 (单机默认). 指定值=确定性 (分布式可复现).
+
+    out_dir:     输出目录. None=临时目录(用完删除), "."=当前目录保留.
+    result_file: 引擎结果文件名 (相对 out/). 分布式多 task 并发同目录时传唯一名.
     """
     # 字符集
     if "charset_hex" in config:
@@ -130,7 +142,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None) -> dict:
         n_threads = os.cpu_count() or 4
     config["n_threads"] = n_threads
 
-    params = _build_params(config, charset_hex)
+    params = _build_params(config, charset_hex, result_file)
 
     # 引擎路径
     if engine_bin is None:
@@ -171,7 +183,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None) -> dict:
         # 读取结果
         results = []
         mxp, mxd = 0, 0
-        result_path = os.path.join(result_dir, "result.txt")
+        result_path = os.path.join(result_dir, result_file)
         if os.path.exists(result_path):
             with open(result_path, encoding="utf-8") as f:
                 for line in f:

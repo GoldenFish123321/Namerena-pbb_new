@@ -29,7 +29,12 @@
 #include <cstdlib>
 
 #define MAX_QUEUE_LEN 4        // 任务队列容量
-#define NUMBER_PER_TASK 1000000ULL  // 每任务处理的名字数
+// ---- 两层并行术语 (第一性原理: f(i) 无依赖, 切 i 空间) ----
+//   chunk: 引擎内部线程级切分单位 (本文件), 生产者按 CHUNK_SIZE 切 [rL,rR) 喂给消费者线程
+//   task : 分布式级切分单位 (服务端), 服务端按更大粒度切总 range 下发给各客户端
+//          客户端拿到一个 task 后, 在本进程内再被切成多个 chunk 并行
+// 二者是同一抽象的两层, 不可混用。本宏仅指 chunk。
+#define CHUNK_SIZE 1000000ULL  // 每个 chunk 处理的名字数 (引擎内部线程级单位)
 
 // ---- 任务数据结构 ----
 struct TaskData{uint64_t L,R;int prefix_id,suffix_id,type,task_id;};
@@ -91,14 +96,28 @@ inline int engine_main(int argc,char**argv){
     std::vector<bool> mex_vis;              // task_id 完成标记
     unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
     auto t_start=std::chrono::steady_clock::now();
-    std::mt19937_64 rng_global(std::chrono::steady_clock::now().time_since_epoch().count());
+    // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
+    //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
+    //   seed 为具体数值        : 确定性种子 (分布式: 服务端给每个 task 存固定 seed,
+    //                            超时重发同 seed → 结果可复现/可去重)
+    // 注意: mode 2/3/4 的随机性仍依赖线程数 (rng 派生自 cid)。同 seed + 同线程数
+    //       → 可复现。分布式下服务端应记录 task 的线程数, 或客户端固定线程数。
+    uint64_t g_seed;
+    {
+        auto it=kv.find("seed");
+        if(it!=kv.end() && !it->second.empty() && it->second!="-1")
+            g_seed=std::stoull(it->second);
+        else
+            g_seed=(uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+    }
+    std::mt19937_64 rng_global(g_seed);
 
     // mode=2/3/4 预处理
     int varlen_task=vlen;uint64_t random_range_max=1;
-    if(mode>=2){varlen_task=0;uint64_t x=1;while(x<NUMBER_PER_TASK){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
+    if(mode>=2){varlen_task=0;uint64_t x=1;while(x<CHUNK_SIZE){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
 
     // 预分配 mex_vis (预计 task 数, 留 20% 余量)
-    int est_tasks=(int)((rR-rL+NUMBER_PER_TASK-1)/NUMBER_PER_TASK*np*1.2)+10;
+    int est_tasks=(int)((rR-rL+CHUNK_SIZE-1)/CHUNK_SIZE*np*1.2)+10;
     mex_vis.resize(est_tasks,false);
 
     // ---- task_id 序号生成器 ----
@@ -106,12 +125,12 @@ inline int engine_main(int argc,char**argv){
 
     // ---- Producer: 生成任务 ----
     auto prod=[&]{
-        if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=NUMBER_PER_TASK){
-            uint64_t tr=i+NUMBER_PER_TASK;if(tr>rR)tr=rR;
+        if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
+            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
             TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
             t.task_id=task_id_counter++;q_add(q,t);}
-        else for(uint64_t i=rL;i<rR;i+=NUMBER_PER_TASK){
-            uint64_t tr=i+NUMBER_PER_TASK;if(tr>rR)tr=rR;
+        else for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
+            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
             TaskData t;t.L=i;t.R=tr;t.type=mode;
             t.prefix_id=rng_global()%np+1;t.suffix_id=mode==4?t.prefix_id:rng_global()%ns+1;
             t.task_id=task_id_counter++;q_add(q,t);}
@@ -134,7 +153,7 @@ inline int engine_main(int argc,char**argv){
             if(mode>=2){
                 int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
                 epre+=extra*scl;evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
-                if(mode==2||mode==4){L=rng()%random_range_max;R=L+NUMBER_PER_TASK;}
+                if(mode==2||mode==4){L=rng()%random_range_max;R=L+CHUNK_SIZE;}
             }else{
                 name.PRELEN=plen;name.load_prefix(buf,nlen);uint8_t dl[16],dr[16];uint64_t now;
                 now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
@@ -195,7 +214,7 @@ inline int engine_main(int argc,char**argv){
                 if(td%100==0){
                     auto now=std::chrono::steady_clock::now();
                     double sec=std::chrono::duration<double>(now-t_start).count();
-                    long long done_num=1ll*td*NUMBER_PER_TASK;
+                    long long done_num=1ll*td*CHUNK_SIZE;
                     long long tmlft=ALL_totnum>done_num?((ALL_totnum-done_num)*1.0/done_num)*sec:0;
                     // 原版第一行: taskX finished, task_mex=Y, count:Z.ZZZT
                     if(output_log)fprintf(flog,"task%d finished,task_mex=%d,count:%.6lfT\n",
@@ -205,11 +224,11 @@ inline int engine_main(int argc,char**argv){
                     // 原版第二行: tot=N, (八围,XP,XD), time: Xs, speed: XT/d, time left:XhXmXs
                     if(output_speed)fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
                         total_found.load(),max_sum,max_xp,max_xd,sec,
-                        td/sec*86400*NUMBER_PER_TASK/1e12,
+                        td/sec*86400*CHUNK_SIZE/1e12,
                         tmlft/3600,(tmlft%3600)/60,tmlft%60);
                     else fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
                         total_found.load(),max_sum,max_xp,max_xd,sec,
-                        td/sec*86400*NUMBER_PER_TASK/1e12,
+                        td/sec*86400*CHUNK_SIZE/1e12,
                         tmlft/3600,(tmlft%3600)/60,tmlft%60);
                     fflush(output_log?stderr:flog);
                     fflush(output_speed?stderr:fspeed);
