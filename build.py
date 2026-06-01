@@ -86,11 +86,9 @@ def ensure_pbb_core(rebuild=False):
 
 
 def _compile_flags():
-    """返回当前平台的编译旗标 (pybind11 和 standalone 引擎共用)."""
+    """返回 pybind11 编译旗标 (Windows 上固定 MSVC, 因 setup() 总是用 cl.exe)."""
     if sys.platform == "win32":
-        # Windows: MSVC cl 用 /Ox /utf-8, icpx/g++ 用 -O3
-        if shutil.which("icpx") or shutil.which("g++"):
-            return ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        # setup() 在 Windows 上固定用 MSVC cl.exe, 不用 GNU 旗标
         return ["/std:c++17", "/Ox", "/utf-8"]
     flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math",
              "-fno-plt", "-fno-semantic-interposition"]
