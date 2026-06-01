@@ -78,7 +78,8 @@ ext = Pybind11Extension("pbb_core", ["{os.path.join(BASE_DIR, 'src', 'bridge.cpp
 setup(name="pbb_core", ext_modules=[ext], cmdclass={{"build_ext": build_ext}},
     script_args=["build_ext", "--inplace"])
 ''')
-    subprocess.run([sys.executable, setup_py], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    subprocess.run([sys.executable, setup_py],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     os.unlink(setup_py)
 
 
