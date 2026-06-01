@@ -7,8 +7,25 @@
 #   2. 创建虚拟环境 .venv (首次)
 #   3. 安装 Python 依赖到 .venv
 #   4. 启动 main.py
+#
+# 选项: -y 跳过所有确认 (CI/Docker 用)
 # ============================================================
 set -e
+
+# ── -y 自动确认 ──
+_yes=false
+_main_args=""
+for _a in "$@"; do
+    case "$_a" in -y) _yes=true ;; *) _main_args="$_main_args $_a" ;; esac
+done
+set -- $_main_args
+
+_confirm() {
+    $_yes && return 0
+    printf "%s (y/n) " "$1"
+    read -r _ans
+    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ]
+}
 
 # ── 包管理器检测 ──
 _is_termux=false
@@ -27,33 +44,37 @@ elif command -v pacman >/dev/null 2>&1; then
     _gcc_pkg="gcc"
 else
     echo "ERROR: 无法检测包管理器 (支持 apt/dnf/pacman/pkg)" >&2
-    echo "  请手动安装: python3, g++, python3-venv" >&2
     exit 1
 fi
 
 # ── Python ──
 if ! command -v python3 >/dev/null 2>&1; then
     echo "[run] python3 not found."
-    printf "Install python3? (y/n) "
-    read -r _ans
-    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_pkg python3 || { echo "[run] python3 required, aborting."; exit 1; }
+    if _confirm "Install python3?"; then
+        $_pkg python3
+    else
+        echo "[run] python3 required, aborting."; exit 1
+    fi
 fi
 
 # ── C++ 编译器 ──
 if ! command -v g++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1; then
     echo "[run] No C++ compiler found (g++/clang++)."
-    printf "Install $_gcc_pkg? (y/n) "
-    read -r _ans
-    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_pkg $_gcc_pkg || { echo "[run] C++ compiler required, aborting."; exit 1; }
+    if _confirm "Install $_gcc_pkg?"; then
+        $_pkg $_gcc_pkg
+    else
+        echo "[run] C++ compiler required, aborting."; exit 1
+    fi
 fi
 
 # ── python3-venv (Debian/Ubuntu 不随 python3 安装) ──
 if ! python3 -c "import venv" 2>/dev/null; then
     echo "[run] python3-venv not found."
-    printf "Install python3-venv? (y/n, default=n) "
-    read -r _ans
-    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] || echo "[run] venv will use system python3 as fallback"
-    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_is_termux || $_pkg python3-venv 2>/dev/null || true
+    if _confirm "Install python3-venv?"; then
+        $_is_termux || $_pkg python3-venv 2>/dev/null || true
+    else
+        echo "[run] Skipping, venv will use system python3 as fallback"
+    fi
 fi
 
 cd "$(dirname "$0")"
@@ -67,7 +88,7 @@ for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
     fi
 done
 
-# ── 虚拟环境 (venv失败时回退系统python3, 不自动装系统包) ──
+# ── 虚拟环境 ──
 _use_venv=true
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."
@@ -82,10 +103,7 @@ if $_use_venv; then
     _python=".venv/bin/python3"
     _pip=".venv/bin/python3 -m pip install --quiet"
 else
-    echo ""
-    printf "[run] Install pyyaml,pybind11 to system Python? (y/n) "
-    read -r _ans
-    if [ "$_ans" = "y" ] || [ "$_ans" = "Y" ]; then
+    if _confirm "Install pyyaml,pybind11 to system Python?"; then
         _python="python3"
         _pip="python3 -m pip install --quiet --break-system-packages"
     else
@@ -98,7 +116,8 @@ fi
 $_pip pyyaml setuptools pybind11 2>/dev/null || {
     echo "WARNING: pip install 失败, 请检查网络" >&2
 }
-if [ "$(python3 -c 'import sys; print(sys.version_info.minor)')" -lt 11 ]; then
+_py_minor=$(python3 -c "import sys; print(sys.version_info.minor)")
+if [ "$_py_minor" -lt 11 ]; then
     $_pip tomli 2>/dev/null || true
 fi
 

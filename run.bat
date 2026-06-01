@@ -1,7 +1,18 @@
 @chcp 65001 >nul 2>&1
 @echo off
 REM PBB Name Scoring Tester — One-click launcher (Windows)
+REM Options: -y  skip all confirmations (CI/automation)
 cd /d "%~dp0"
+
+REM ---- Parse -y flag ----
+set YES=0
+set MAIN_ARGS=
+:parse_args
+if "%~1"=="" goto :done_args
+if "%~1"=="-y" (set YES=1) else (set MAIN_ARGS=%MAIN_ARGS% %1)
+shift
+goto :parse_args
+:done_args
 
 REM ---- Intel oneAPI (auto-source if installed) ----
 for %%d in ("C:\Program Files (x86)\Intel\oneAPI" "C:\Program Files\Intel\oneAPI") do (
@@ -78,5 +89,5 @@ if defined HAS_UV (
 )
 
 REM ---- Run ----
-.venv\Scripts\python main.py %*
+.venv\Scripts\python main.py %MAIN_ARGS%
 if errorlevel 1 pause
