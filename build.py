@@ -75,14 +75,21 @@ def ensure_pbb_core(rebuild=False):
         extra_compile_args=extra_flags,
         extra_link_args=[],
     )
-    setup(
-        name="pbb_core",
-        version="1.0.0",
-        description="PBB Name Scoring Core",
-        ext_modules=[ext],
-        cmdclass={"build_ext": build_ext},
-        script_args=["build_ext", "--inplace"],
-    )
+    # 抑制 setuptools 编译日志
+    import io
+    _old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        setup(
+            name="pbb_core",
+            version="1.0.0",
+            description="PBB Name Scoring Core",
+            ext_modules=[ext],
+            cmdclass={"build_ext": build_ext},
+            script_args=["build_ext", "--inplace"],
+        )
+    finally:
+        sys.stdout = _old_stdout
 
 
 def _compile_flags():

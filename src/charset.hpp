@@ -85,8 +85,6 @@ inline void init_exhanzi() {
   load_exhanzi(178176, 178431);     // CJK Ext-F: (approx)
   load_exhanzi(178432, 183969);     // CJK Ext-E cont.
   load_exhanzi(183984, 191456);     // CJK Ext-F/G
-  fprintf(stderr, "hanzi_cnt_3=%d\n", hanzi_len_3);
-  fprintf(stderr, "hanzi_cnt_4=%d\n", hanzi_len_4);
 }
 
 // ===== load_hanzi: 加载 BMP 基本汉字到 charset 缓冲区 =====
