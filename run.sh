@@ -51,6 +51,15 @@ fi
 
 cd "$(dirname "$0")"
 
+# ── Intel oneAPI (自动加载环境) ──
+for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
+    if [ -f "$_dir/setvars.sh" ]; then
+        echo "[run] Intel oneAPI found, loading ..."
+        . "$_dir/setvars.sh" >/dev/null 2>&1 || true
+        break
+    fi
+done
+
 # ── 虚拟环境 ──
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."

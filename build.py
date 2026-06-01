@@ -44,14 +44,13 @@ def _find_compiler():
     """返回 (compiler_name, flags) 或 None."""
     # icpx: 检查 PATH + oneAPI 默认路径
     icpx = shutil.which("icpx")
-    if not icpx and sys.platform == "win32":
-        for ver in ["latest", "2026.0", "2025.0"]:
-            p = f"C:\\Program Files (x86)\\Intel\\oneAPI\\compiler\\{ver}\\bin\\icpx.exe"
-            if os.path.exists(p): icpx = p; break
-    if not icpx and sys.platform != "win32":
-        for ver in ["latest", "2026.0", "2025.0"]:
-            p = f"/opt/intel/oneapi/compiler/{ver}/bin/icpx"
-            if os.path.exists(p): icpx = p; break
+    if not icpx:
+        for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
+                  "/opt/intel/oneapi"]:
+            for ver in ["latest", "2026.0", "2025.0"]:
+                p = os.path.join(d, "compiler", ver, "bin",
+                                 "icpx.exe" if sys.platform == "win32" else "icpx")
+                if os.path.exists(p): icpx = p; break
     if icpx:
         flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                  "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
@@ -112,7 +111,10 @@ def ensure_all(rebuild=False):
         from setuptools import setup
 
         cc = _find_compiler()
-        if cc and cc[0] in ("icpx", "g++"):
+        if cc and cc[0] == "icpx":
+            os.environ["CC"] = os.environ["CXX"] = "icpx"
+            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        elif cc and cc[0] == "g++":
             flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         else:
             flags = ["/std:c++17", "/Ox", "/utf-8", "/w"]
