@@ -112,6 +112,18 @@ def _validate_config(cfg: dict):
         if isinstance(custom, list) and len(custom) == 0:
             _die("character_set.custom_values 不能为空列表")
 
+        # ── 字节对齐检查 ──
+        # 每个字符的 UTF-8 字节数必须与 scl 一致，否则 charset_len = total_bytes // scl
+        # 会算错（engine.py:_build_params:88），引擎编码全坏。
+        if isinstance(custom, str):
+            for i, ch in enumerate(custom):
+                blen = len(ch.encode("utf-8"))
+                if blen != scl:
+                    _die(f"character_set.custom_values[{i}]: scl={scl} 但字符 '{ch}' (U+{ord(ch):04X}) 为 {blen} 字节，应为 {scl} 字节")
+        else:
+            if len(custom) % scl != 0:
+                _die(f"character_set.custom_values: scl={scl} 但列表长度 {len(custom)} 不是 {scl} 的整数倍")
+
     # ── enumeration ──
     en = cfg.get("enumeration", {})
     mode = en.get("mode")

@@ -118,6 +118,10 @@ inline int engine_main(int argc,char**argv){
     unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
     // mode 2/3/4: 随机模式不按 prefix 翻倍, 总名数 = range 长度
     if(mode>=2) ALL_totnum = rR - rL;
+    // mode 2/4: consumer 中 R=L+CHUNK_SIZE 覆盖了 producer 区间,
+    // 每个 chunk 固定处理 CHUNK_SIZE 个名字, 最后一块可能超出理论 range,
+    // 因此 ALL_totnum 需向上取整到 CHUNK_SIZE 边界 (否则 SUMMARY speed 和进度条 time-left 偏小)
+    if(mode==2||mode==4) ALL_totnum = ((rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
     auto t_start=std::chrono::steady_clock::now();
     // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
@@ -247,16 +251,10 @@ inline int engine_main(int argc,char**argv){
                     long long done_num=1ll*td*CHUNK_SIZE;
                     long long tmlft=ALL_totnum>done_num?((ALL_totnum-done_num)*1.0/done_num)*sec:0;
                     // 原版第一行: taskX finished, task_mex=Y, count:Z.ZZZT
-                    if(output_log)fprintf(flog,"task%d finished,task_mex=%d,count:%.6lfT\n",
-                        t.task_id,mex_cur,done_num/1e12);
-                    else fprintf(flog,"task%d finished,task_mex=%d,count:%.6lfT\n",
+                    fprintf(flog,"task%d finished,task_mex=%d,count:%.6lfT\n",
                         t.task_id,mex_cur,done_num/1e12);
                     // 原版第二行: tot=N, (八围,XP,XD), time: Xs, speed: XT/d, time left:XhXmXs
-                    if(output_speed)fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
-                        total_found.load(),max_sum,max_xp,max_xd,sec,
-                        td/sec*86400*CHUNK_SIZE/1e12,
-                        tmlft/3600,(tmlft%3600)/60,tmlft%60);
-                    else fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
+                    fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
                         total_found.load(),max_sum,max_xp,max_xd,sec,
                         td/sec*86400*CHUNK_SIZE/1e12,
                         tmlft/3600,(tmlft%3600)/60,tmlft%60);

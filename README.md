@@ -73,7 +73,7 @@ threads:
 | **4** 随机(区间+配对) | 类似 mode 2，prefix/suffix 配对 | 同上 |
 
 **随机模式关键概念**：
-- **次数** = `(end - start) / 1M` 个 chunk，每个 chunk 1M 个名字
+- **次数** = `ceil((end - start) / 1M)` 个 chunk，每个 chunk 1M 个名字（向上取整：mode 2/4 的 consumer 中 `R=L+CHUNK_SIZE` 覆盖 producer 区间，即使最后一块不足 1M 也处理 1M）
 - **随机范围** = `charset 字符数 ^ variable_length`（自动计算）
 - 例：10 个 emoji + `variable_length: 4` → 范围 = 10⁴ = 10000
 - `ranges[0].end` 设大一些获得更多采样（如 100M = 100 chunks = 1 亿次随机）
