@@ -32,9 +32,13 @@ _is_termux=false
 if [ -d /data/data/com.termux ]; then
     _is_termux=true
     _pkg="pkg install -y"
-    _gcc_pkg="clang"           # Termux 用 clang
+    _gcc_pkg="clang"
 elif command -v apt >/dev/null 2>&1; then
-    _pkg="sudo apt install -y"
+    if [ "$(id -u)" = "0" ]; then
+        _pkg="apt install -y"       # Docker/root: no sudo
+    else
+        _pkg="sudo apt install -y"
+    fi
     _gcc_pkg="g++"
 elif command -v dnf >/dev/null 2>&1; then
     _pkg="sudo dnf install -y"
@@ -46,7 +50,6 @@ else
     echo "ERROR: 无法检测包管理器 (支持 apt/dnf/pacman/pkg)" >&2
     exit 1
 fi
-
 # ── Python ──
 if ! command -v python3 >/dev/null 2>&1; then
     echo "[run] python3 not found."
