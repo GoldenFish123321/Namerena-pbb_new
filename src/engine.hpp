@@ -36,8 +36,24 @@
 // 二者是同一抽象的两层, 不可混用。本宏仅指 chunk。
 #define CHUNK_SIZE 1000000ULL  // 每个 chunk 处理的名字数 (引擎内部线程级单位)
 
+// ---- 确定性子种子派生 (splitmix64) ----
+// 由 (g_seed, task_id) 混合出每个 chunk 的专属种子。
+// 第一性原理: chunk 的随机性必须由其逻辑坐标 (seed, task_id) 唯一决定,
+//             与"哪个线程跑、跑的顺序、用几个线程"等执行环境细节完全无关。
+//             这样同 seed + 同 range 在任意线程数下结果可复现。
+static inline uint64_t splitmix64(uint64_t x){
+    x+=0x9E3779B97F4A7C15ULL;
+    x=(x^(x>>30))*0xBF58476D1CE4E5B9ULL;
+    x=(x^(x>>27))*0x94D049BB133111EBULL;
+    return x^(x>>31);
+}
+static inline uint64_t derive_chunk_seed(uint64_t g_seed,int task_id){
+    return splitmix64(g_seed ^ splitmix64((uint64_t)task_id));
+}
+
 // ---- 任务数据结构 ----
-struct TaskData{uint64_t L,R;int prefix_id,suffix_id,type,task_id;};
+// chunk_seed: 该 chunk 的确定性随机种子 (producer 创建时派生, 与线程无关)
+struct TaskData{uint64_t L,R;int prefix_id,suffix_id,type,task_id;uint64_t chunk_seed;};
 struct TaskQueue{TaskData d[MAX_QUEUE_LEN];int h=0,t=0;bool closed=false;std::mutex mtx;std::condition_variable cv_add,cv_get;};
 
 // 环形队列操作 (生产者-消费者)
@@ -100,8 +116,8 @@ inline int engine_main(int argc,char**argv){
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
     //   seed 为具体数值        : 确定性种子 (分布式: 服务端给每个 task 存固定 seed,
     //                            超时重发同 seed → 结果可复现/可去重)
-    // 注意: mode 2/3/4 的随机性仍依赖线程数 (rng 派生自 cid)。同 seed + 同线程数
-    //       → 可复现。分布式下服务端应记录 task 的线程数, 或客户端固定线程数。
+    // 问题3修复 (2026-06-01): 每个 chunk 的随机性派生自 (g_seed, task_id),
+    //   与线程数/调度顺序完全无关。同 seed + 同 range → 任意线程数下结果可复现。
     uint64_t g_seed;
     {
         auto it=kv.find("seed");
@@ -110,7 +126,6 @@ inline int engine_main(int argc,char**argv){
         else
             g_seed=(uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
     }
-    std::mt19937_64 rng_global(g_seed);
 
     // mode=2/3/4 预处理
     int varlen_task=vlen;uint64_t random_range_max=1;
@@ -124,26 +139,34 @@ inline int engine_main(int argc,char**argv){
     int task_id_counter=0;
 
     // ---- Producer: 生成任务 ----
+    // 每个 chunk 的随机决策 (prefix/suffix 选择) 由其 chunk_seed 派生,
+    // 不再共享 rng_global, 确保与执行顺序/线程数无关。
     auto prod=[&]{
         if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
             uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
             TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
-            t.task_id=task_id_counter++;q_add(q,t);}
+            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);}
         else for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
             uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
             TaskData t;t.L=i;t.R=tr;t.type=mode;
-            t.prefix_id=rng_global()%np+1;t.suffix_id=mode==4?t.prefix_id:rng_global()%ns+1;
-            t.task_id=task_id_counter++;q_add(q,t);}
+            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
+            std::mt19937_64 prng(t.chunk_seed);
+            t.prefix_id=prng()%np+1;t.suffix_id=mode==4?t.prefix_id:prng()%ns+1;
+            q_add(q,t);}
         q_close(q);
     };
 
     // ---- Consumer: 处理任务 (编码 + RC4 + 评分) ----
-    auto cons=[&](int cid){Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));std::mt19937_64 rng(rng_global()+cid*1234567);TaskData t;
+    // rng 改为 per-chunk 重建 (用 t.chunk_seed), 不再按线程 id 初始化、跨 chunk 连续使用。
+    // 这是问题3的核心修复: 随机性与线程数/调度顺序彻底解耦。
+    auto cons=[&](int cid){(void)cid;Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
         // 编码宏: 全内联, 编译器在 scl==4 分支将 memcpy(...,4) 优化为单条 mov
         #define ENC(dst,ci) do{const char*_s=cb+(ci)*scl;if(scl==4)memcpy((dst),_s,4);else if(scl==1)*(dst)=*_s;else if(scl==2)memcpy((dst),_s,2);else if(scl==3)memcpy((dst),_s,3);else memcpy((dst),_s,scl);}while(0)
         while(q_get(q,t)){
+            // 每个 chunk 用自己的确定性种子重建 rng (与执行环境无关)
+            std::mt19937_64 rng(t.chunk_seed);
             // 构建名字缓冲区: prefix + 占位 + suffix
             const std::string&p=prefixes[(t.prefix_id-1)%np];const std::string&s=suffixes[(t.suffix_id-1)%ns];
             int plen=(int)p.size(),slen=(int)s.size(),nlen=plen+vlen*scl+slen;
@@ -241,6 +264,22 @@ inline int engine_main(int argc,char**argv){
     std::thread pt(prod);std::vector<std::thread>cts;
     for(int i=0;i<n_threads;i++)cts.emplace_back(cons,i);
     pt.join();for(auto&t:cts)t.join();
+
+    // ===== 权威摘要 (问题4/5修复, 2026-06-01) =====
+    // 引擎是唯一真相源: max_sum/max_xp/max_xd 追踪所有名字(不止达标的),
+    // speed 是纯算力吞吐(不含 Python fork/字符集初始化/文件读取等 IPC 噪声)。
+    // Python 直接采信此行, 不再从文件重算 max、不再用墙钟反算 speed。
+    // 格式: SUMMARY max_sum=.. max_xp=.. max_xd=.. found=.. count=.. elapsed=.. speed=..
+    //   count=已处理名字总数, speed=名字/秒 (纯计算)
+    {
+        auto t_end=std::chrono::steady_clock::now();
+        double calc_sec=std::chrono::duration<double>(t_end-t_start).count();
+        unsigned long long processed=ALL_totnum;  // 总名字数 (= (rR-rL)*np)
+        double speed=calc_sec>0?(double)processed/calc_sec:0.0;
+        fprintf(stderr,"SUMMARY max_sum=%d max_xp=%d max_xd=%d found=%d count=%llu elapsed=%.6f speed=%.6f\n",
+            max_sum,max_xp,max_xd,total_found.load(),processed,calc_sec,speed);
+        fflush(stderr);
+    }
 
     // 关闭文件
     fclose(fp);if(fp_blue)fclose(fp_blue);

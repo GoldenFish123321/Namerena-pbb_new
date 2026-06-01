@@ -170,17 +170,27 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         proc.stdin.write(params)
         proc.stdin.close()
 
+        # 引擎权威摘要 (问题4/5: SUMMARY 行由引擎输出, Python 采信不重算)
+        summary = None
         for line in proc.stderr:
             line = line.strip()
-            if line:
-                print(f"  {line}", file=sys.stderr, flush=True)
+            if not line:
+                continue
+            if line.startswith("SUMMARY "):
+                # 解析 key=value 摘要; 不当普通进度行打印 (避免污染输出)
+                summary = {}
+                for tok in line[len("SUMMARY "):].split():
+                    k, _, v = tok.partition("=")
+                    summary[k] = v
+                continue
+            print(f"  {line}", file=sys.stderr, flush=True)
         proc.wait()
         elapsed = time.time() - t0
 
         if proc.returncode != 0:
             raise RuntimeError(f"Engine failed ({proc.returncode})")
 
-        # 读取结果
+        # 读取结果 (名字列表仍从文件读; max/speed 优先采信引擎摘要)
         results = []
         mxp, mxd = 0, 0
         result_path = os.path.join(result_dir, result_file)
@@ -205,7 +215,20 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         if _use_temp:
             _tmp.cleanup()
 
+    # 问题4/5: 优先采信引擎权威摘要 (max 含所有名字、speed 为纯算力吞吐)。
+    # 文件重算的 max 仅是达标名字的 max (语义不同), 墙钟反算的 speed 含 IPC 噪声。
+    # 摘要缺失时 (旧引擎/异常) 回退到文件重算 + 墙钟反算, 保证健壮性。
+    if summary is not None:
+        max_xp = int(summary.get("max_xp", mxp))
+        max_xd = int(summary.get("max_xd", mxd))
+        max_sum = int(summary.get("max_sum", 0))
+        found = int(summary.get("found", len(results)))
+        speed = float(summary.get("speed", 0.0))
+        return {"results": results, "max_xp": max_xp, "max_xd": max_xd,
+                "max_sum": max_sum, "found": found, "speed": speed}
+
+    # 回退路径 (无摘要)
     rng = config["range_end"] - config["range_start"]
     speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
-
-    return {"results": results, "max_xp": mxp, "max_xd": mxd, "speed": speed}
+    return {"results": results, "max_xp": mxp, "max_xd": mxd,
+            "max_sum": 0, "found": len(results), "speed": speed}

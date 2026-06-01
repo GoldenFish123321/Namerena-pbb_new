@@ -15,12 +15,43 @@ PBB 名字评分测号器 — Python 编排层.
   python3 main.py -c config.yaml         # 直接调用
   python3 main.py                         # 自动查找 config.json/yaml/toml
 """
-import json, os, sys, time, argparse
+import json, os, sys, time, argparse, uuid
+from datetime import datetime
 
 from build import ensure_all          # 编译模块
 from engine import run as run_engine  # 引擎执行
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolve_result_file(raw: str) -> str:
+    """解析 result_file 配置值.
+
+    +  → 随机 hex 名 (result_<8hex>.txt)
+    -  → 时间戳名   (result_<YYYYMMDD_HHMMSS>.txt)
+    其他 → 原样使用
+    自动去除前导 out/ (引擎内部已加)
+    """
+    raw = raw.strip() if raw else ""
+    if raw == "+":
+        resolved = f"result_{uuid.uuid4().hex[:8]}.txt"
+    elif raw == "-" or raw == "":
+        resolved = f"result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    else:
+        resolved = raw
+    # 引擎内部统一加 out/ 前缀, 此处去除避免双写
+    if resolved.startswith("out/") or resolved.startswith("out\\"):
+        resolved = resolved[4:]
+    return resolved
+
+
+def _print_results(results: list, output_xp: int):
+    """将结果列表打印到 stdout (格式与输出文件一致)."""
+    for r in results:
+        if output_xp:
+            print(f"{r['name']} {r['xp']} {r['xd']}")
+        else:
+            print(r["name"])
 
 
 def main():
@@ -39,6 +70,9 @@ def main():
     parser.add_argument("--xd-min", type=int, help="覆盖: collection.xd_min")
     parser.add_argument("--collect-mode", type=int, choices=[0,1,2], help="覆盖: collection.collect_mode")
     parser.add_argument("--output-xp", type=int, choices=[0,1], help="覆盖: output.output_xp")
+    parser.add_argument("-o", "--output-file", help="覆盖: output.result_file (+ =随机, - =时间戳, 其他=自定义)")
+    parser.add_argument("-O", "--output-dest", choices=["file", "stdout", "both"], default=None,
+                        help="输出目标: file=仅文件(默认) stdout=仅终端 both=文件+终端")
     parser.add_argument("--scl", type=int, choices=[1,2,3,4], help="覆盖: character_set.single_char_length")
     parser.add_argument("--types", help="覆盖: character_set.types (逗号分隔, 如 1,2,3)")
     parser.add_argument("--custom-values", help="覆盖: character_set.custom_values (字符串)")
@@ -82,6 +116,14 @@ def main():
     cl = cfg["collection"]
     out_cfg = cfg["output"]
     rng = en.get("ranges", [{}])[0]
+
+    # 解析输出文件名: 配置文件 → CLI 覆盖
+    result_file = _resolve_result_file(out_cfg.get("result_file", "result.txt"))
+    if args.output_file is not None:
+        result_file = _resolve_result_file(args.output_file)
+
+    # 输出目标: CLI > 默认 file
+    output_dest = args.output_dest or "file"
 
     task_config = {
         "team_name":      cfg["team_name"],
@@ -135,15 +177,31 @@ def main():
     if n == -1:
         n = _os.cpu_count() or 4
     task_config["n_threads"] = n
-    print(f"[main] Threads: {n}, Mode: {task_config['mode']}", file=sys.stderr)
+
+    # stdout 模式: 使用临时目录 (引擎写文件, Python 读取后自动清理)
+    if output_dest == "stdout":
+        out_dir = None       # run() 内部创建 TemporaryDirectory, 用完即删
+        print(f"[main] Threads: {n}, Mode: {task_config['mode']}, Output: stdout", file=sys.stderr)
+    elif output_dest == "both":
+        out_dir = "."
+        print(f"[main] Threads: {n}, Mode: {task_config['mode']}, Output: file+stdout → out/{result_file}", file=sys.stderr)
+    else:  # file
+        out_dir = "."
+        print(f"[main] Threads: {n}, Mode: {task_config['mode']}, Output: out/{result_file}", file=sys.stderr)
+
     t0 = time.time()
-    result = run_engine(task_config, engine_bin, out_dir=".")
+    result = run_engine(task_config, engine_bin, out_dir=out_dir, result_file=result_file)
     elapsed = time.time() - t0
 
     # ── 6. 输出 ──
     count = len(result["results"])
-    rng_size = task_config["range_end"] - task_config["range_start"]
     speed = result["speed"]
+    output_xp = task_config["output_xp"]
+
+    # 终端打印结果 (stdout / both 模式)
+    if output_dest in ("stdout", "both"):
+        _print_results(result["results"], output_xp)
+
     print(f"\n[main] Done in {elapsed:.1f}s", file=sys.stderr)
     print(f"[main] Found: {count}, Max: XP={result['max_xp']} XD={result['max_xd']}", file=sys.stderr)
     if speed > 0:

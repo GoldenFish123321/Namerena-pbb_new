@@ -57,10 +57,9 @@
 
     "ranges": [
       {
-        "count": 1,
         "start": 0,
         "end": 100000000,
-        "_comment": "区间 [start, end), count=使用此前缀的任务数"
+        "_comment": "区间 [start, end)"
       }
     ],
     "_comment_ranges": "多个前缀共享此区间, end 必须为有限值"

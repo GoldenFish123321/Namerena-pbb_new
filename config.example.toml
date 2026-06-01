@@ -55,7 +55,6 @@ variable_length = 8
 
 # 区间 [start, end), end 必须为有限值
 [[enumeration.ranges]]
-count = 1         # 使用此区间的前缀任务数
 start = 0         # 起始编号 (含)
 end = 100000000   # 结束编号 (不含), 100M = 约 1~2 分钟
 

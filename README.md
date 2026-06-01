@@ -37,8 +37,7 @@ enumeration:
   mode: 1                       # 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(配对)
   variable_length: 8             # 可变字符数
   ranges:
-    - count: 1
-      start: 0                  # 起始编号
+    - start: 0                  # 起始编号
       end: 100000000            # 结束编号 (不含)
 
 collection:
@@ -93,6 +92,8 @@ python3 main.py -c config.yaml \
   --xp-min 5000 --xd-min 6000 \
   --collect-mode 2 \
   --output-xp 1 \
+  -o myrun.txt \                 # 输出文件名 (可选: + 随机, - 时间戳)
+  -O both \                      # 输出目标 (可选: file/stdout/both)
   --scl 3 --types 7 --custom-values "你好世界"
 ```
 
@@ -109,6 +110,8 @@ python3 main.py -c config.yaml \
 | `--xd-min` | `collection.xd_min` | `--xd-min 6000` |
 | `--collect-mode` | `collection.collect_mode` | `--collect-mode 2` |
 | `--output-xp` | `output.output_xp` | `--output-xp 1` |
+| `-o` / `--output-file` | `output.result_file` | `-o myrun.txt` / `-o +` |
+| `-O` / `--output-dest` | (无) 控制输出位置 | `-O stdout` / `-O both` |
 | `--scl` | `character_set.single_char_length` | `--scl 3` |
 | `--types` | `character_set.types` | `--types 1,7` |
 | `--custom-values` | `character_set.custom_values` | `--custom-values "你好"` |
@@ -157,7 +160,29 @@ tot=17, (741,5615,5933),time: 28.54s, speed: 0.3027T/d,time left:0h0m0s
 
 ## 输出
 
-结果写入 `out/` 目录：
+### 输出文件名
+
+配置 `output.result_file` 控制输出文件名：
+
+| 值 | 含义 | 示例 |
+|----|------|------|
+| `-` | 时间戳 (默认) | `result_20260601_153045.txt` |
+| `+` | 随机 hex | `result_a3f2b1c8.txt` |
+| 其他 | 自定义名称 | `my_output.txt` |
+
+文件名自动加上 `out/` 前缀，无需手动写。CLI 可覆盖：`--output-file myrun.txt` / `-o +`
+
+### 输出目标
+
+`--output-dest` (`-O`) 控制结果输出位置：
+
+| 值 | 行为 |
+|----|------|
+| `file` | 仅写入 `out/<文件名>` (默认) |
+| `stdout` | 仅打印到终端 (不保留文件) |
+| `both` | 写入文件 + 终端打印 |
+
+结果格式：
 
 ```
 名字@队伍名 XP XD
@@ -207,12 +232,17 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 #   config 模式 B: 含 charset_hex   → 直接使用 (服务端下发, 免重复构建)
 #   config["seed"]: 随机种子 (mode 2/3/4)
 #       None        → 时间熵 (单机默认, 每次结果不同)
-#       具体数值     → 确定性 (分布式: 同 seed + 同线程数 → 结果可复现/可去重)
+#       具体数值     → 确定性 (分布式: 同 seed → 结果可复现/可去重, 与线程数无关)
 #   result_file: 多 task 并发同目录时传唯一名, 避免撞文件
+# 返回: {results, max_xp, max_xd, max_sum, found, speed}
+#   max_*/found/speed 由引擎权威输出 (SUMMARY 行), Python 不重算。
+#   speed 为纯算力吞吐 (名字/秒, 不含子进程 fork / 字符集初始化 / 文件读取)。
 ```
 
-> 随机 mode（2/3/4）的可复现性是分布式 task 超时回收重发的前提：
-> 服务端为每个 task 存固定 seed，重发时下发同一 seed，客户端产生相同名字集。
+> **随机性与线程数解耦**：每个 chunk 的随机性派生自 `(seed, task_id)`，
+> 与"用几个线程、谁来跑、跑的顺序"完全无关。**同 seed + 同 range 在任意线程数下结果完全一致**
+> （已用 3/6/12 线程 md5 对拍验证）。这是分布式 task 超时回收重发的前提：
+> 服务端为每个 task 存固定 seed，重发时下发同一 seed，无论分给几核机器都产生相同名字集，可去重。
 
 
 ## 文件结构
