@@ -91,21 +91,18 @@ for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
     fi
 done
 
-# ── 虚拟环境 ──
-_use_venv=true
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."
-    python3 -m venv .venv 2>/dev/null || {
-        echo "[run] venv failed (python3-venv not installed), using system python3"
-        echo "[run]   Tip: apt install python3-venv  to enable venv"
-        _use_venv=false
-    }
+    python3 -m venv .venv 2>/dev/null || true
 fi
 
-if $_use_venv; then
+# venv 完整性检查 (ensurepip 缺失会创建无 pip 的残废 venv)
+if [ -f .venv/bin/python3 ] && .venv/bin/python3 -m pip --version >/dev/null 2>&1; then
     _python=".venv/bin/python3"
     _pip=".venv/bin/python3 -m pip install --quiet"
 else
+    rm -rf .venv
+    echo "[run] venv unavailable, using system python3"
     if _confirm "Install pyyaml,pybind11 to system Python?"; then
         _python="python3"
         _pip="python3 -m pip install --quiet --break-system-packages"
