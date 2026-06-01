@@ -8,12 +8,14 @@
 # 复制示例配置, 修改参数
 cp config.example.yaml config.yaml
 
-# 一键启动 (自动创建虚拟环境、安装依赖、编译引擎)
-./run.sh -c config.yaml          # Linux / Termux
+# 一键启动 (自动检测环境、安装依赖、编译引擎)
+./run.sh -c config.yaml          # Linux / Termux / Docker
+./run.sh -y -c config.yaml       # 跳过确认 (CI/Docker)
 run.bat -c config.yaml           # Windows
+run.bat -y -c config.yaml        # Windows 跳过确认
 ```
 
-首次运行自动检测环境、安装系统包、创建 `.venv`、编译 C++ 引擎。无需手动操作。
+首次运行自动：检测系统包管理器 → 编译 C++ 引擎 → 启动。所有系统级安装前会确认（`-y` 跳过）。
 
 ## 配置
 
@@ -83,7 +85,6 @@ custom_values: "🐒🐵🐊🦎🐍🐛🙈🙉🙊🐉"
 ## 命令行参数
 
 ```bash
-# 14 个参数直接覆盖配置文件
 python3 main.py -c config.yaml \
   --team "测试队" \
   --threads 8 \
@@ -112,6 +113,35 @@ python3 main.py -c config.yaml \
 | `--types` | `character_set.types` | `--types 1,7` |
 | `--custom-values` | `character_set.custom_values` | `--custom-values "你好"` |
 
+## 环境检测与指令集优化
+
+启动时自动检测环境并输出摘要：
+
+```
+[env] OS: linux x86_64
+[env] CPU: x86_64 (6 cores)
+[env] Python: 3.12.3
+[env] engine: icpx(AVX-512) -> g++(AVX2)
+[env] pbb_core: icpx(AVX-512) -> g++(AVX2)
+```
+
+编译器按性能优先级自动选择，编译失败自动回退：
+
+| 平台 | engine 编译器优先级 | 指令集 |
+|------|--------------------|--------|
+| Linux x86_64 | icpx → g++ | AVX-512 > AVX2 |
+| Linux ARM / Termux | g++ | NEON (128bit) |
+| Windows x86_64 | icpx → g++ → MSVC | AVX-512 > AVX2 |
+
+`pbb_core`（Python 扩展模块）在 Windows 上优先用 MSVC（Python ABI 兼容）。
+
+编译和运行时会打印 SIMD 级别：
+
+```
+[build] SIMD: AVX-512
+[engine] SIMD: AVX-512
+```
+
 ## 进度显示
 
 引擎运行时实时输出进度 (每 100 个 task)：
@@ -134,57 +164,50 @@ tot=17, (741,5615,5933),time: 28.54s, speed: 0.3027T/d,time left:0h0m0s
 test-🙈🐛🐊🐍@test 5021 5003
 ```
 
-`collect_mode=1/2` 时特殊属性号写入 `out/blue.txt`。
-
-`output_xp=0` 时不显示分数。
-
-## 平台
-
-| 平台 | 入口 | 说明 |
-|------|------|------|
-| Linux x86_64 | `./run.sh` | icpx (Intel) 优先, g++ 回退 |
-| Linux ARM | `./run.sh` | g++ 标量回退 |
-| Termux (Android) | `./run.sh` | 自动 pkg install python/clang |
-| Windows | `run.bat` | icpx > g++ > MSVC cl |
+`collect_mode=1/2` 时特殊属性号写入 `out/blue.txt`。`output_xp=0` 时不显示分数。
 
 ## 架构
 
 ```
 build.py (Python)              pbb_engine (C++ 子进程)
 ─────────────────            ───────────────────────────
-编译器检测 + 统一编译          producer-consumer 引擎
-(icpx / g++ / MSVC)           编码循环
-                              RC4 状态机 + 评分
-engine.py (Python)            fprintf 直接写文件
-─────────────────             进度实时输出
-字符集构建 + 引擎执行
+编译器自动检测 (icpx/g++/cl)   producer-consumer 多线程引擎
+指令集自动探测 (AVX512/AVX2/   RC4 KSA → 属性评分 → 技能分布
+  NEON)                       hanxu_Poly 多项式特征扩展
+统一编译 + 回退机制            MODEL 线性模型打分 (XP/XD)
+                              stderr 实时进度 → Python 解析
 
-main.py (Python)
+engine.py (Python)             src/ 核心 (header-only)
+─────────────────            ───────────────────────────
+字符集构建 (pbb_core)          common.hpp  类型 + SIMD 检测
+stdin 管道传参                 utils.hpp   AVX512/AVX2/NEON
+Popen → stderr 逐行读取        name.hpp    RC4 状态机
+结果统计                       scoring.hpp 评分流水线
+
+main.py (Python)               engine.hpp  引擎主循环
 ─────────────────
-CLI + 配置 + 调用 engine.run()
+CLI + 配置解析 + 调用 engine.run()
 ```
-
-build.py 负责编译, engine.py 负责执行, main.py 负责编排。
 
 ## 文件结构
 
-```python
-├── run.sh / run.bat          # 入口 (建 .venv + 装依赖 + source oneAPI)
-├── build.py                  # 统一编译: icpx/g++/MSVC → pbb_core + pbb_engine
-├── engine.py                 # 引擎执行: 构建字符集 → Popen 子进程 → 解析结果
-├── main.py                   # 编排层: CLI 解析 + 配置加载 + 调用 engine.run()
+```
+├── run.sh / run.bat          # 入口 (建 .venv + 装依赖, -y 跳过确认)
+├── build.py                  # 编译器检测 + SIMD 探测 + 统一编译
+├── engine.py                 # 引擎执行: 构建字符集 → Popen → 解析结果
+├── main.py                   # 编排层: CLI 解析 + 配置加载
 ├── engine_main.cpp           # C++ 引擎入口
 ├── config.example.json       # JSON 配置示例
 ├── config.example.yaml       # YAML 配置示例
 ├── config.example.toml       # TOML 配置示例
 └── src/
-    ├── common.hpp            # 类型别名、常量
+    ├── common.hpp            # 类型 + SIMD 自动检测 (AVX512/AVX2/NEON)
     ├── charset_data.hpp      # 字符集原始数据 (希腊/俄文/拉丁/盲文/汉字)
-    ├── model_data.hpp        # 评分模型权重 (MODEL/MODELQD)
-    ├── utils.hpp             # median/sort10/SIMD 工具
+    ├── model_data.hpp        # 评分模型权重 (MODEL/MODELQD, 1035 floats)
+    ├── utils.hpp             # median/sort10 + 三路 SIMD (AVX512/AVX2/NEON)
     ├── charset.hpp           # 字符集加载 + Unicode 编码
-    ├── name.hpp              # RC4 状态机
-    ├── scoring.hpp           # 评分流水线 (V值检查→技能检查→hanxu_Poly→打分)
-    ├── engine.hpp            # C++ 引擎 (producer-consumer, stdin 传参)
+    ├── name.hpp              # RC4 状态机 (KSA → PRGA → 技能分布)
+    ├── scoring.hpp           # 评分流水线 (V值→技能→hanxu_Poly预计算表→打分)
+    ├── engine.hpp            # 引擎主循环 (producer-consumer, stdin 传参)
     └── bridge.cpp            # pybind11 字符集数据绑定
 ```
