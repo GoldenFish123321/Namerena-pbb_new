@@ -3,20 +3,26 @@ chcp 65001 >nul 2>&1
 REM PBB Name Scoring Tester — One-click launcher (Windows)
 cd /d "%~dp0"
 
-REM ---- Find/install Python ----
+REM ---- Find Python (uv first, then PATH) ----
 set PYTHON=
-where python  >nul 2>&1 && set PYTHON=python
-where python3 >nul 2>&1 && set PYTHON=python3
-where uv      >nul 2>&1 && set HAS_UV=1
+where uv >nul 2>&1 && set HAS_UV=1
+
+if defined HAS_UV (
+    for /f "delims=" %%i in ('uv python find 2^>nul') do set PYTHON=%%i
+)
+if not defined PYTHON (
+    where python  >nul 2>&1 && set PYTHON=python
+    where python3 >nul 2>&1 && set PYTHON=python3
+)
 
 if not defined PYTHON (
     if defined HAS_UV (
-        echo [run] Installing Python via uv ...
-        uv python install 3.12
-        for /f "delims=" %%i in ('uv python find 3.12') do set PYTHON=%%i
+        echo [run] Installing Python 3.13 via uv ...
+        uv python install 3.13
+        for /f "delims=" %%i in ('uv python find 3.13') do set PYTHON=%%i
     ) else (
         echo [run] Python not found. Install one of:
-        echo   uv: https://docs.astral.sh/uv/  (fast)
+        echo   uv: https://docs.astral.sh/uv/
         echo   Python: https://www.python.org/downloads/
         pause
         exit /b 1
