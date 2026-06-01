@@ -50,8 +50,7 @@ echo [run] Python: %PYTHON%
 
 REM ---- AMD Zen5: MSYS2 UCRT64 GCC (auto-detect, priority over PATH g++) ----
 if exist "C:\msys64\ucrt64\bin\g++.exe" (
-    echo [run] Zen5: MSYS2 UCRT64 g++ detected — enabling znver5
-    set "PATH=C:\msys64\ucrt64\bin;%PATH%"
+    echo [run] Zen5: MSYS2 UCRT64 g++ detected
 )
 
 REM ---- Check C++ compiler ----

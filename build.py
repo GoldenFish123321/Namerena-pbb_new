@@ -231,9 +231,6 @@ def _compile_pbb_core(verbose=False):
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
     compilers = _find_compilers(verbose)  # icpx > g++ > cl
-    # Windows: skip g++ for pbb_core (MinGW ABI incompatible with MSVC Python)
-    if sys.platform == "win32":
-        compilers = [c for c in compilers if "g++" not in str(c[0])]
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
@@ -249,7 +246,7 @@ def _compile_pbb_core(verbose=False):
         # MinGW g++ on Windows: static link runtime to avoid missing DLL errors
         extra_link = link[:]
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
-            flags = flags + ["-static-libgcc", "-static-libstdc++"]
+            flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
 
         cmd = _compile(name, flags, is_msvc, src, out,
                        extra_includes=includes, extra_link=extra_link, shared=True)
@@ -280,6 +277,8 @@ def _compile_engine(verbose=False):
 
     last_err = ""
     for name, flags, simd_name, is_msvc in compilers:
+        if sys.platform == "win32" and not is_msvc and "g++" in str(name):
+            flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
         cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
         if verbose:
             print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
