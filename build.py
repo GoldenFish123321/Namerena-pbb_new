@@ -120,10 +120,9 @@ def _find_compilers(for_core=False):
         flags += ["-xHost", "-finline-functions"]
         result.append((icpx, flags, "auto (-xHost)", False))
 
-    # 2/3: MSVC before g++ for pbb_core (Python ABI), g++ before MSVC for engine
-    if for_core and sys.platform == "win32":
-        # pbb_core must match Python's compiler (MSVC)
-        if shutil.which("cl"):
+    # 2/3: MSVC before g++ for pbb_core (Python ABI) or engine on Windows (reliability)
+    if for_core or sys.platform == "win32":
+        if sys.platform == "win32" and shutil.which("cl"):
             simd_flags, simd_name = _detect_simd("cl")
             result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
         if shutil.which("g++"):
@@ -226,24 +225,29 @@ def _compile_pbb_core():
 
 
 def _compile_engine():
-    """Compile engine_main.cpp → pbb_engine. Uses first available compiler."""
-    compilers = _find_compilers()  # engine: g++ preferred over MSVC
+    """Compile engine_main.cpp → pbb_engine. Tries compilers in priority order."""
+    compilers = _find_compilers()  # g++ preferred for engine
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags, simd_name, is_msvc = compilers[0]
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
     includes = [os.path.join(BASE_DIR, "src")]
 
-    cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
-    print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
-    print(f"[build] SIMD: {simd_name}", file=sys.stderr)
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-    if r.returncode != 0:
-        print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
-        sys.exit(1)
+    last_err = ""
+    for name, flags, simd_name, is_msvc in compilers:
+        cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
+        print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
+        print(f"[build] SIMD: {simd_name}", file=sys.stderr)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if r.returncode == 0:
+            return
+        last_err = r.stderr
+        print(f"[build] {name} failed, trying next compiler ...", file=sys.stderr)
+
+    print(f"[build] All compilers failed:\n{last_err[-1000:]}", file=sys.stderr)
+    sys.exit(1)
 
 
 def ensure_all(rebuild=False):
