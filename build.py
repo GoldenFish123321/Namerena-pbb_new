@@ -266,10 +266,30 @@ def _compile_engine():
     sys.exit(1)
 
 
+def _env_info():
+    """Print environment summary: OS, CPU, Python, available compilers + SIMD."""
+    import platform
+    print(f"[env] OS: {sys.platform} {platform.machine()}", file=sys.stderr)
+    try:
+        cpu = platform.processor() or "unknown"
+        cores = os.cpu_count() or "?"
+        print(f"[env] CPU: {cpu} ({cores} cores)", file=sys.stderr)
+    except:
+        pass
+    print(f"[env] Python: {sys.version.split()[0]}", file=sys.stderr)
+
+    # Show all detected compilers with their SIMD levels
+    for label, is_core in [("engine", False), ("pbb_core", True)]:
+        compilers = _find_compilers(for_core=is_core)
+        names = [f"{c[0]}({c[2]})" for c in compilers]
+        print(f"[env] {label}: {' -> '.join(names) if names else 'NONE'}", file=sys.stderr)
+
+
 def ensure_all(rebuild=False):
     check_python()
     check_deps()
     os.chdir(BASE_DIR)
+    _env_info()
 
     if rebuild or not _pbb_core_exists():
         _compile_pbb_core()
