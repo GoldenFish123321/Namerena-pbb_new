@@ -152,37 +152,39 @@ test-🙈🐛🐊🐍@test 5021 5003
 ```
 build.py (Python)              pbb_engine (C++ 子进程)
 ─────────────────            ───────────────────────────
-环境检测 + C++ 编译            producer-consumer 引擎
+编译器检测 + 统一编译          producer-consumer 引擎
 (icpx / g++ / MSVC)           编码循环
                               RC4 状态机 + 评分
-main.py (Python)              fprintf 直接写文件
+engine.py (Python)            fprintf 直接写文件
 ─────────────────             进度实时输出
-JSON/YAML/TOML 配置解析
-字符集构建 (pbb_core .so)
-stdin 管道传参
-结果统计
+字符集构建 + 引擎执行
+
+main.py (Python)
+─────────────────
+CLI + 配置 + 调用 engine.run()
 ```
 
-build.py 负责编译，main.py 负责编排。C++ 子进程隔离消除 Python 运行时干扰。
+build.py 负责编译, engine.py 负责执行, main.py 负责编排。
 
 ## 文件结构
 
-```
-├── run.sh / run.bat          # 入口 (建 .venv + 装依赖)
-├── build.py                  # 环境检测 + C++ 编译 (icpx/g++/MSVC)
-├── main.py                   # 配置解析 + 字符集构建 + 运行
+```python
+├── run.sh / run.bat          # 入口 (建 .venv + 装依赖 + source oneAPI)
+├── build.py                  # 统一编译: icpx/g++/MSVC → pbb_core + pbb_engine
+├── engine.py                 # 引擎执行: 构建字符集 → Popen 子进程 → 解析结果
+├── main.py                   # 编排层: CLI 解析 + 配置加载 + 调用 engine.run()
 ├── engine_main.cpp           # C++ 引擎入口
 ├── config.example.json       # JSON 配置示例
 ├── config.example.yaml       # YAML 配置示例
 ├── config.example.toml       # TOML 配置示例
 └── src/
-    ├── common.hpp            # 类型、常量
-    ├── charset_data.hpp      # 字符集原始数据
-    ├── model_data.hpp        # 评分模型权重
-    ├── utils.hpp             # median/sort10/SIMD
-    ├── charset.hpp           # 字符集 + Unicode 编码
+    ├── common.hpp            # 类型别名、常量
+    ├── charset_data.hpp      # 字符集原始数据 (希腊/俄文/拉丁/盲文/汉字)
+    ├── model_data.hpp        # 评分模型权重 (MODEL/MODELQD)
+    ├── utils.hpp             # median/sort10/SIMD 工具
+    ├── charset.hpp           # 字符集加载 + Unicode 编码
     ├── name.hpp              # RC4 状态机
-    ├── scoring.hpp           # hanxu_Poly + 完整评分
-    ├── engine.hpp            # 引擎 (stdin传参, 进度显示)
-    └── bridge.cpp            # pybind11 绑定
+    ├── scoring.hpp           # 评分流水线 (V值检查→技能检查→hanxu_Poly→打分)
+    ├── engine.hpp            # C++ 引擎 (producer-consumer, stdin 传参)
+    └── bridge.cpp            # pybind11 字符集数据绑定
 ```
