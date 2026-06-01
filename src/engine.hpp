@@ -70,14 +70,14 @@ static std::vector<std::string> split_csv(const std::string& s){std::vector<std:
 // ===== 引擎入口 =====
 inline int engine_main(int argc,char**argv){
     (void)argc;(void)argv;
-    // 第一时间输出，确认进程已启动（崩溃在此之后才是引擎内部问题）
-    fprintf(stderr,"[engine] === START ===\n");fflush(stderr);
-    init_exhanzi();
-    fprintf(stderr,"[engine] charset init done\n");fflush(stderr);
 
     // 从 stdin 读取参数 (Python 通过管道传入)
     std::unordered_map<std::string,std::string> kv;std::string line;
     while(std::getline(std::cin,line)){if(line.empty())continue;size_t eq=line.find('=');if(eq!=std::string::npos)kv[line.substr(0,eq)]=line.substr(eq+1);}
+
+    int debug_mode=kv.count("debug_mode")?std::stoi(kv["debug_mode"]):0;
+#define DBG(fmt,...) do{if(debug_mode){fprintf(stderr,"[engine] " fmt "\n",##__VA_ARGS__);fflush(stderr);}}while(0)
+    DBG("=== START ===");
 
     // 读取参数
     std::string team=kv["team_name"];int n_threads=std::stoi(kv["n_threads"]);
@@ -106,8 +106,8 @@ inline int engine_main(int argc,char**argv){
     FILE*flog=output_log?stderr:fopen("out/task_log.txt","a");
     FILE*fspeed=output_speed?stderr:fopen("out/speed_log.txt","a");
     fprintf(flog,"[engine] SIMD: %s\n",PBB_SIMD_NAME);fflush(flog);
-    fprintf(stderr,"[engine] files opened, n_threads=%d mode=%d range=[%llu,%llu)\n",
-            n_threads,mode,(unsigned long long)rL,(unsigned long long)rR);fflush(stderr);
+    DBG("files opened, n_threads=%d mode=%d range=[%llu,%llu)",
+        n_threads,mode,(unsigned long long)rL,(unsigned long long)rR);
 
     // 初始化 Name 状态机 (队伍名 KSA)
     Name name_init;name_init.load_team(team.c_str());
@@ -266,12 +266,12 @@ inline int engine_main(int argc,char**argv){
         }};
 
     // 启动线程
-    fprintf(stderr,"[engine] creating 1 producer + %d consumers...\n",n_threads);fflush(stderr);
+    DBG("creating 1 producer + %d consumers...",n_threads);
     std::thread pt(prod);std::vector<std::thread>cts;
     for(int i=0;i<n_threads;i++)cts.emplace_back(cons,i);
-    fprintf(stderr,"[engine] all threads running\n");fflush(stderr);
+    DBG("all threads running");
     pt.join();for(auto&t:cts)t.join();
-    fprintf(stderr,"[engine] all threads joined\n");fflush(stderr);
+    DBG("all threads joined");
 
     // ===== 权威摘要 (问题4/5修复, 2026-06-01) =====
     // 引擎是唯一真相源: max_sum/max_xp/max_xd 追踪所有名字(不止达标的),

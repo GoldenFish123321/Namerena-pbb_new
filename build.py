@@ -206,7 +206,7 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
     return cmd
 
 
-def _compile_pbb_core():
+def _compile_pbb_core(verbose=False):
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
     compilers = _find_compilers()  # icpx > g++ > cl
@@ -231,8 +231,9 @@ def _compile_pbb_core():
 
         cmd = _compile(name, flags, is_msvc, src, out,
                        extra_includes=includes, extra_link=extra_link, shared=True)
-        print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
-        print(f"[build] SIMD: {simd_name}", file=sys.stderr)
+        if verbose:
+            print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
+        print(f"[build] pbb_core: {name} ({simd_name})", file=sys.stderr)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return  # success
@@ -243,7 +244,7 @@ def _compile_pbb_core():
     sys.exit(1)
 
 
-def _compile_engine():
+def _compile_engine(verbose=False):
     """Compile engine_main.cpp → pbb_engine. Tries compilers in priority order."""
     compilers = _find_compilers()  # g++ preferred for engine
     if not compilers:
@@ -257,8 +258,9 @@ def _compile_engine():
     last_err = ""
     for name, flags, simd_name, is_msvc in compilers:
         cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
-        print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
-        print(f"[build] SIMD: {simd_name}", file=sys.stderr)
+        if verbose:
+            print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
+        print(f"[build] engine: {name} ({simd_name})", file=sys.stderr)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return
@@ -288,16 +290,16 @@ def _env_info():
         print(f"[env] {label}: {' -> '.join(names) if names else 'NONE'}", file=sys.stderr)
 
 
-def ensure_all(rebuild=False):
+def ensure_all(rebuild=False, verbose=False):
     check_python()
     check_deps()
     os.chdir(BASE_DIR)
     _env_info()
 
     if rebuild or not _pbb_core_exists():
-        _compile_pbb_core()
+        _compile_pbb_core(verbose)
 
     if rebuild or not os.path.exists(_engine_bin()):
-        _compile_engine()
+        _compile_engine(verbose)
 
     return _engine_bin()

@@ -80,7 +80,7 @@ def main():
     args = parser.parse_args()
 
     # ── 2. 环境准备 ──
-    engine_bin = ensure_all(rebuild=args.rebuild)
+    engine_bin = ensure_all(rebuild=args.rebuild, verbose=args.debug)
 
     # ── 3. 解析配置文件 ──
     try: import yaml; HAS_YAML = True
