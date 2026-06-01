@@ -11,7 +11,7 @@ cp config.example.yaml config.yaml
 # 一键启动 (自动检测环境、安装依赖、编译引擎)
 ./run.sh -c config.yaml          # Linux / Termux / Docker
 ./run.sh -y -c config.yaml       # 跳过确认 (CI/Docker)
-run.bat -c config.yaml           # Windows
+run.bat -c config.yaml           # Windows (自动检测 icpx/g++/cl, Zen5 自动启用 MSYS2 GCC)
 run.bat -y -c config.yaml        # Windows 跳过确认
 ```
 
@@ -39,7 +39,7 @@ enumeration:
   variable_length: 8             # 可变字符数
   ranges:
     - start: 0                  # 起始编号
-      end: 100000000            # 结束编号 (不含)
+      end: 100000000            # 结束编号 (不含), -1=几乎无限
 
 collection:
   xp_min: 4900                  # 虚评最低阈值
