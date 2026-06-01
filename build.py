@@ -102,6 +102,22 @@ def _detect_simd(compiler):
     return ([], "none")
 
 
+def _gcc_arch_flags(compiler):
+    """Detect GCC -march support. znver5 for Zen5, fallback to native/generic."""
+    arch = "znver5"
+    flag = f"-march={arch}"
+    if _compiler_probe(compiler, flag):
+        return [flag], ", march=znver5"
+
+    fallback = "-march=native"
+    if _compiler_probe(compiler, fallback):
+        print(f"[build] WARNING: {compiler} 不支持 {flag}; 使用 {fallback}", file=sys.stderr)
+        return [fallback], ", march=native"
+
+    print(f"[build] WARNING: {compiler} 不支持 -march; 跳过 CPU 优化", file=sys.stderr)
+    return [], ""
+
+
 def _find_compilers():
     """Detect all available compilers, return in performance order.
     Each entry: (name, flags, simd_name, is_msvc).
@@ -143,8 +159,9 @@ def _find_compilers():
 
     if gpp:
         base = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        arch_flags, arch_name = _gcc_arch_flags("g++")
         simd_flags, simd_name = _detect_simd("g++")
-        entries.append(("g++", base + simd_flags, simd_name, False))
+        entries.append(("g++", base + arch_flags + simd_flags, simd_name + arch_name, False))
 
     if cl:
         simd_flags, simd_name = _detect_simd("cl")

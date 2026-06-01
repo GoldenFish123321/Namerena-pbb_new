@@ -52,6 +52,7 @@ REM ---- Check C++ compiler ----
 where cl      >nul 2>&1 && set HAS_CC=1
 where g++     >nul 2>&1 && set HAS_CC=1
 where clang++ >nul 2>&1 && set HAS_CC=1
+if exist "C:\msys64\ucrt64\bin\g++.exe" set HAS_CC=1
 if not defined HAS_CC (
     echo [run] No C++ compiler found.
     pause
