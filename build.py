@@ -111,13 +111,12 @@ def ensure_all(rebuild=False):
         from setuptools import setup
 
         cc = _find_compiler()
-        if cc and cc[0] == "icpx":
-            os.environ["CC"] = os.environ["CXX"] = "icpx"
-            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        elif cc and cc[0] == "g++":
-            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        else:
+        # pbb_core 桥接层, 性能不敏感. setup() 在 Windows 上固定用 MSVC,
+        # 所以始终给 MSVC 旗标 (或 icpx/g++ 的 GNU 旗标在 Linux 上).
+        if sys.platform == "win32":
             flags = ["/std:c++17", "/Ox", "/utf-8", "/w"]
+        else:
+            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
 
         ext = Pybind11Extension("pbb_core", ["src/bridge.cpp"],
             cxx_std=17, include_dirs=["src"],
