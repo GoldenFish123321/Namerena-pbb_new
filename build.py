@@ -66,6 +66,7 @@ def _detect_simd(compiler):
     """Returns (additional_flags, simd_name)."""
     is_win = sys.platform == "win32"
     is_msvc = os.path.basename(compiler).startswith("cl")
+    is_icpx = "icpx" in os.path.basename(compiler).lower()
 
     if not is_win:
         import platform
@@ -75,6 +76,9 @@ def _detect_simd(compiler):
 
     if is_msvc:
         candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
+    elif is_icpx:
+        # icpx -x flags: tune for specific Intel uarch + enable ISA
+        candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
     else:
         candidates = [(["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
                       (["-mavx2", "-mfma"], "AVX2")]
@@ -123,10 +127,11 @@ def _find_compilers(for_core=False):
 
     if icpx:
         if is_win:
+            simd_flags, simd_name = _detect_simd("icpx")
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xCORE-AVX2", "-finline-functions"]
-            entries.append((icpx, flags, "AVX2", False))
+                     "-qopenmp", "-finline-functions"] + simd_flags
+            entries.append((icpx, flags, simd_name, False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
