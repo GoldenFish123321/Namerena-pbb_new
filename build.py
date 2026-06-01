@@ -78,11 +78,7 @@ def _detect_simd(compiler):
         candidates = [(["/arch:AVX512"], "AVX-512"), (["/arch:AVX2"], "AVX2")]
     elif is_icpx:
         # icpx -x flags: tune for specific Intel uarch + enable ISA
-        # Windows: skip AVX-512 on Arrow Lake (pre-main illegal instruction with -xCORE-AVX512)
-        if is_win:
-            candidates = [(["-xCORE-AVX2"], "AVX2")]
-        else:
-            candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
+        candidates = [(["-xCORE-AVX512"], "AVX-512"), (["-xCORE-AVX2"], "AVX2")]
     else:
         candidates = [(["-mavx512f", "-mavx512bw", "-mfma"], "AVX-512"),
                       (["-mavx2", "-mfma"], "AVX2")]
@@ -132,8 +128,9 @@ def _find_compilers(for_core=False):
     if icpx:
         if is_win:
             simd_flags, simd_name = _detect_simd("icpx")
-            # Minimal: Arrow Lake debugging — strip exotic flags to find crash culprit
-            flags = ["-std=c++17", "-O3"] + simd_flags
+            flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                     "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
+                     "-qopenmp", "-finline-functions"] + simd_flags
             entries.append((icpx, flags, simd_name, False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",

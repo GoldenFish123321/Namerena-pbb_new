@@ -49,17 +49,6 @@
   #endif
 #endif
 
-// 编译器优化指令 (GCC/Clang)
-#if defined(__GNUC__) || defined(__clang__)
-  #pragma GCC optimize("Ofast")
-  #if PBB_HAS_AVX512
-    #pragma GCC target("avx512f,avx512bw")
-  #elif PBB_HAS_AVX2
-    #pragma GCC target("avx2")
-  #endif
-  #pragma GCC optimize("unroll-loops")
-#endif
-
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
