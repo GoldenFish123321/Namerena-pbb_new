@@ -101,7 +101,7 @@ def _find_compilers(for_core=False):
     """
     result = []
 
-    # 1. icpx (Intel) — best optimization
+    # Find icpx binary
     icpx = shutil.which("icpx")
     if not icpx:
         for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
@@ -110,33 +110,36 @@ def _find_compilers(for_core=False):
                 p = os.path.join(d, "compiler", ver, "bin",
                                  "icpx.exe" if sys.platform == "win32" else "icpx")
                 if os.path.exists(p): icpx = p; break
-    if icpx:
-        flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
-                 "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
-        if sys.platform == "win32":
-            flags += ["-qopenmp"]
-        else:
-            flags += ["-lpthread"]
-        flags += ["-xHost", "-finline-functions"]
-        result.append((icpx, flags, "auto (-xHost)", False))
 
-    # 2/3: MSVC before g++ for pbb_core (Python ABI) or engine on Windows (reliability)
-    if for_core or sys.platform == "win32":
-        if sys.platform == "win32" and shutil.which("cl"):
+    # 1. icpx (Intel) — best optimization, not first on Windows (runtime issues)
+    def _add_icpx():
+        nonlocal icpx
+        if icpx:
+            flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                     "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5"]
+            if sys.platform == "win32":
+                flags += ["-qopenmp"]
+            else:
+                flags += ["-lpthread"]
+            flags += ["-xHost", "-finline-functions"]
+            result.append((icpx, flags, "auto (-xHost)", False))
+
+    # Windows: cl first (reliable), then icpx.  Other platforms: icpx first.
+    if sys.platform == "win32":
+        if shutil.which("cl"):
             simd_flags, simd_name = _detect_simd("cl")
             result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
+        _add_icpx()
         if shutil.which("g++"):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             simd_flags, simd_name = _detect_simd("g++")
             result.append(("g++", base_flags + simd_flags, simd_name, False))
     else:
+        _add_icpx()
         if shutil.which("g++"):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             simd_flags, simd_name = _detect_simd("g++")
             result.append(("g++", base_flags + simd_flags, simd_name, False))
-        if sys.platform == "win32" and shutil.which("cl"):
-            simd_flags, simd_name = _detect_simd("cl")
-            result.append(("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"] + simd_flags, simd_name, True))
 
     return result
 
