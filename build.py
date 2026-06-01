@@ -108,12 +108,21 @@ def ensure_all(rebuild=False):
 
     if rebuild or not _pbb_core_exists():
         print("[build] pbb_core ...", file=sys.stderr)
-        env = os.environ.copy()
+        from pybind11.setup_helpers import Pybind11Extension, build_ext
+        from setuptools import setup
+
         cc = _find_compiler()
-        if cc and cc[0] == "icpx":
-            env["CC"] = env["CXX"] = "icpx"
-        subprocess.run([sys.executable, os.path.join(BASE_DIR, "setup.py"),
-                        "build_ext", "--inplace"], check=True, env=env)
+        if cc and cc[0] in ("icpx", "g++"):
+            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
+        else:
+            flags = ["/std:c++17", "/Ox", "/utf-8", "/w"]
+
+        ext = Pybind11Extension("pbb_core", ["src/bridge.cpp"],
+            cxx_std=17, include_dirs=["src"],
+            extra_compile_args=flags)
+        setup(name="pbb_core", version="1.0.0",
+              ext_modules=[ext], cmdclass={"build_ext": build_ext},
+              script_args=["build_ext", "--inplace"])
 
     if rebuild or not os.path.exists(_engine_bin()):
         _compile_engine()
