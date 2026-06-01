@@ -33,20 +33,27 @@ fi
 
 # ── Python ──
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "[run] Installing python3..."
-    $_pkg python3
+    echo "[run] python3 not found."
+    printf "Install python3? (y/n) "
+    read -r _ans
+    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_pkg python3 || { echo "[run] python3 required, aborting."; exit 1; }
 fi
 
 # ── C++ 编译器 ──
 if ! command -v g++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1; then
-    echo "[run] Installing C++ compiler..."
-    $_pkg $_gcc_pkg
+    echo "[run] No C++ compiler found (g++/clang++)."
+    printf "Install $_gcc_pkg? (y/n) "
+    read -r _ans
+    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_pkg $_gcc_pkg || { echo "[run] C++ compiler required, aborting."; exit 1; }
 fi
 
 # ── python3-venv (Debian/Ubuntu 不随 python3 安装) ──
 if ! python3 -c "import venv" 2>/dev/null; then
-    echo "[run] Installing python3-venv..."
-    $_is_termux || $_pkg python3-venv 2>/dev/null || true
+    echo "[run] python3-venv not found."
+    printf "Install python3-venv? (y/n, default=n) "
+    read -r _ans
+    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] || echo "[run] venv will use system python3 as fallback"
+    [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] && $_is_termux || $_pkg python3-venv 2>/dev/null || true
 fi
 
 cd "$(dirname "$0")"
@@ -60,16 +67,14 @@ for _dir in "/opt/intel/oneapi" "$HOME/intel/oneapi"; do
     fi
 done
 
-# ── 虚拟环境 (venv不可用时尝试装python3-venv, 仍不行才回退系统python3) ──
+# ── 虚拟环境 (venv失败时回退系统python3, 不自动装系统包) ──
 _use_venv=true
 if [ ! -f .venv/bin/python3 ]; then
     echo "[run] Creating virtual environment..."
     python3 -m venv .venv 2>/dev/null || {
-        echo "[run] venv failed, installing python3-venv..."
-        $_pkg python3-venv 2>/dev/null && python3 -m venv .venv 2>/dev/null || {
-            echo "[run] python3-venv unavailable, using system python3"
-            _use_venv=false
-        }
+        echo "[run] venv failed (python3-venv not installed), using system python3"
+        echo "[run]   Tip: apt install python3-venv  to enable venv"
+        _use_venv=false
     }
 fi
 
