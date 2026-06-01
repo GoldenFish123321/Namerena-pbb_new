@@ -118,6 +118,10 @@ inline int engine_main(int argc,char**argv){
     unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
     // mode 2/3/4: 随机模式不按 prefix 翻倍, 总名数 = range 长度
     if(mode>=2) ALL_totnum = rR - rL;
+    // mode 2/4: consumer 中 R=L+CHUNK_SIZE 覆盖了 producer 区间,
+    // 每个 chunk 固定处理 CHUNK_SIZE 个名字, 最后一块可能超出理论 range,
+    // 因此 ALL_totnum 需向上取整到 CHUNK_SIZE 边界 (否则 SUMMARY speed 和进度条 time-left 偏小)
+    if(mode==2||mode==4) ALL_totnum = ((rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
     auto t_start=std::chrono::steady_clock::now();
     // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
