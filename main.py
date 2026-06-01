@@ -281,12 +281,11 @@ def main():
     # collect_mode=2: 阈值
     if task_config["collect_mode"] == 2:
         st = cl.get("special_thresholds", {})
-        ev = cl.get("eight_v_min", 0)
         task_config.update({
-            "c_eight_v_min": st.get("eight_v_min", ev),
-            "c_seven_v_min": st.get("seven_v_min", ev),
-            "c_hl_min":      st.get("hl_min", ev),
-            "c_hp398_min":   st.get("hp398_eight_v_min", ev),
+            "c_eight_v_min": st.get("eight_v_min", 0),
+            "c_seven_v_min": st.get("seven_v_min", 0),
+            "c_hl_min":      st.get("hl_min", 0),
+            "c_hp398_min":   st.get("hp398_eight_v_min", 0),
         })
 
     # CLI 覆盖
@@ -306,7 +305,16 @@ def main():
     if args.types is not None:
         task_config["character_set"]["types"] = [int(x.strip()) for x in args.types.split(",")]
     if args.custom_values is not None:
-        task_config["character_set"]["custom_values"] = args.custom_values
+        # 支持字符串和逗号分隔的数字列表 (如 240,159,153)
+        val = args.custom_values
+        try:
+            parts = [int(x.strip()) for x in val.split(",")]
+            if len(parts) > 1:
+                task_config["character_set"]["custom_values"] = parts
+            else:
+                task_config["character_set"]["custom_values"] = val
+        except ValueError:
+            task_config["character_set"]["custom_values"] = val
 
     # ── 5. 执行 ──
     n = task_config.get("n_threads", -1)
