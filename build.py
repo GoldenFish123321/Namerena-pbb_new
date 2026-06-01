@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PBB build script — compile pbb_core (.so/.pyd) + pbb_engine (executable)."""
-import os, sys, glob, subprocess, shutil
+import os, sys, glob, subprocess, shutil, sysconfig
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIRED_PY = (3, 8)
@@ -16,8 +16,6 @@ def check_deps():
     missing = []
     try: import yaml
     except ImportError: missing.append("pyyaml")
-    try: import setuptools
-    except ImportError: missing.append("setuptools")
     try: import pybind11
     except ImportError: missing.append("pybind11")
     if sys.version_info < (3, 11):
@@ -34,15 +32,19 @@ def _engine_bin():
     return os.path.join(BASE_DIR, name)
 
 
+def _pbb_core_path():
+    """pbb_core 输出路径 (pbb_core<ext>)"""
+    ext = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if sys.platform == "win32" else ".so")
+    return os.path.join(BASE_DIR, "pbb_core" + ext)
+
+
 def _pbb_core_exists():
     return bool(glob.glob(os.path.join(BASE_DIR, "pbb_core*.so")) or
-                glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")) or
-                glob.glob(os.path.join(BASE_DIR, "build/lib*", "pbb_core*")))
+                glob.glob(os.path.join(BASE_DIR, "pbb_core*.pyd")))
 
 
 def _find_compiler():
-    """返回 (compiler_name, flags) 或 None."""
-    # icpx: 检查 PATH + oneAPI 默认路径
+    """返回 (compiler_name, flags, is_msvc) 或 None."""
     icpx = shutil.which("icpx")
     if not icpx:
         for d in [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
@@ -58,9 +60,8 @@ def _find_compiler():
             flags += ["-xCORE-AVX2", "-qopenmp"]
         else:
             flags += ["-xHost", "-finline-functions", "-lpthread"]
-        return ("icpx", flags)
+        return (icpx, flags, False)
 
-    # g++
     if shutil.which("g++"):
         flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         if sys.platform != "win32":
@@ -68,32 +69,94 @@ def _find_compiler():
                 if "avx2" in open("/proc/cpuinfo").read().lower():
                     flags += ["-mavx2", "-mfma"]
             except: pass
-        return ("g++", flags)
+        return ("g++", flags, False)
 
-    # MSVC
     if sys.platform == "win32" and shutil.which("cl"):
-        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"])
+        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"], True)
 
     return None
+
+
+def _py_include():
+    """Python C API include dirs."""
+    inc = sysconfig.get_config_var("INCLUDEPY")
+    if inc: return [inc]
+    # fallback
+    return [os.path.join(sys.prefix, "include")]
+
+
+def _py_link_flags():
+    """Python linkage."""
+    libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "libs")
+    ldflags = sysconfig.get_config_var("LDFLAGS") or ""
+    if sys.platform == "win32":
+        ver = f"{sys.version_info.major}{sys.version_info.minor}"
+        return [f"/LIBPATH:{libdir}", f"python{ver}.lib"]
+    return [f"-L{libdir}"] + ldflags.split()
+
+
+def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
+             shared=False):
+    """统一的编译函数."""
+    if is_msvc:
+        cmd = [name] + flags
+        for d in extra_includes:
+            cmd.append(f"/I{d}")
+        if shared:
+            cmd.append("/LD")
+        cmd.append(src)
+        if shared:
+            cmd += ["/link"] + extra_link + [f"/OUT:{out}"]
+        else:
+            cmd += [f"/Fe:{out}"]
+    else:
+        cmd = [name] + flags
+        for d in extra_includes:
+            cmd += [f"-I{d}"]
+        if shared:
+            cmd += ["-shared", "-fPIC"]
+        cmd += ["-o", out, src]
+        cmd += extra_link
+    return cmd
+
+
+def _compile_pbb_core():
+    """直接用 _find_compiler() 编译 bridge.cpp → pbb_core.{so,pyd}."""
+    import pybind11
+    cc = _find_compiler()
+    if not cc:
+        print("ERROR: No C++ compiler found", file=sys.stderr)
+        sys.exit(1)
+
+    name, flags, is_msvc = cc
+    src = os.path.join(BASE_DIR, "src", "bridge.cpp")
+    out = _pbb_core_path()
+    includes = [os.path.join(BASE_DIR, "src"),
+                pybind11.get_include()] + _py_include()
+    link = _py_link_flags()
+
+    cmd = _compile(name, flags, is_msvc, src, out,
+                   extra_includes=includes, extra_link=link, shared=True)
+    print(f"[build] pbb_core: {' '.join(cmd)}", file=sys.stderr)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _compile_engine():
     cc = _find_compiler()
     if not cc:
-        print("ERROR: No C++ compiler found (icpx/g++/cl)", file=sys.stderr)
+        print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
 
-    name, flags = cc
+    name, flags, is_msvc = cc
     src = os.path.join(BASE_DIR, "engine_main.cpp")
     out = _engine_bin()
-    inc = os.path.join(BASE_DIR, "src")
+    includes = [os.path.join(BASE_DIR, "src")]
 
-    if name == "cl":
-        cmd = ["cl"] + flags + [f"/I{inc}", f"/Fe:{out}", src]
-    else:
-        cmd = [name] + flags + [f"-I{inc}", "-o", out, src]
-
-    print(f"[build] {name}: {' '.join(cmd)}", file=sys.stderr)
+    cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
+    print(f"[build] engine: {' '.join(cmd)}", file=sys.stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[build] FAILED:\n{r.stderr}", file=sys.stderr)
@@ -106,24 +169,7 @@ def ensure_all(rebuild=False):
     os.chdir(BASE_DIR)
 
     if rebuild or not _pbb_core_exists():
-        print("[build] pbb_core ...", file=sys.stderr)
-        from pybind11.setup_helpers import Pybind11Extension, build_ext
-        from setuptools import setup
-
-        cc = _find_compiler()
-        # pbb_core 桥接层, 性能不敏感. setup() 在 Windows 上固定用 MSVC,
-        # 所以始终给 MSVC 旗标 (或 icpx/g++ 的 GNU 旗标在 Linux 上).
-        if sys.platform == "win32":
-            flags = ["/std:c++17", "/Ox", "/utf-8", "/w"]
-        else:
-            flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-
-        ext = Pybind11Extension("pbb_core", ["src/bridge.cpp"],
-            cxx_std=17, include_dirs=["src"],
-            extra_compile_args=flags)
-        setup(name="pbb_core", version="1.0.0",
-              ext_modules=[ext], cmdclass={"build_ext": build_ext},
-              script_args=["build_ext", "--inplace"])
+        _compile_pbb_core()
 
     if rebuild or not os.path.exists(_engine_bin()):
         _compile_engine()
