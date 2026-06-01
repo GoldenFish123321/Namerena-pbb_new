@@ -2,8 +2,12 @@
 PBB 引擎执行模块 — 从 main.py 拆分, 供单机/服务端/客户端三方共用.
 
 run(config, engine_bin, out_dir) → {results, max_xp, max_xd, speed}
+
+config 字典使用 engine 键名 (与 engine.hpp kv[...] 及 config_schema.CONFIG_MAP 一致)。
 """
 import os, sys, time, tempfile, subprocess
+
+from config_schema import engine_default, ALL_ENGINE_KEYS
 
 
 def _custom_bytes(values):
@@ -72,9 +76,11 @@ def _build_charset(cs: dict) -> str:
 def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt") -> str:
     """根据配置 + charset_hex 构建引擎 stdin 参数.
 
+    所有 engine 键名来自 config_schema.CONFIG_MAP，默认值通过 engine_default() 统一获取。
     result_file: 引擎输出文件名 (相对 out/). 分布式多 task 并发时应传入唯一名,
                  避免同目录撞文件 (如 f"result_{task_id}.txt").
     """
+    # prefix/suffix CSV
     pfx = config.get("prefixes", "")
     sfx = config.get("suffixes", "")
     if isinstance(pfx, list): pfx = ",".join(pfx)
@@ -87,19 +93,27 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
     scl = config["scl"]
     charset_len = len(bytes.fromhex(charset_hex)) // scl if scl else 0
 
+    # _dv(key): engine_default() 获取默认值 (CONFIG_MAP 唯一定义)
+    def _dv(key: str):
+        try:
+            return engine_default(key)
+        except KeyError:
+            return None  # 计算字段无默认值
+
     params = (
         f"team_name={config['team_name']}\n"
-        f"n_threads={config.get('n_threads', -1)}\n"
+        f"n_threads={config.get('n_threads', _dv('n_threads'))}\n"
         f"scl={scl}\ncharset_len={charset_len}\ncharset_bytes={charset_hex}\n"
         f"prefixes={pfx}\nsuffixes={sfx}\n"
-        f"mode={config['mode']}\nvariable_len={config['vlen']}\n"
-        f"range_L={config['range_start']}\nrange_R={config['range_end']}\n"
-        f"xp_min={config['xp_min']}\nxd_min={config['xd_min']}\n"
-        f"collect_mode={config.get('collect_mode', 0)}\n"
-        f"output_xp={config.get('output_xp', 1)}\n"
-        f"output_log={config.get('output_log', 1)}\n"
-        f"output_speed={config.get('output_speed', 1)}\n"
-        f"debug_mode={config.get('debug_mode', 0)}\n"
+        f"mode={config['mode']}\nvariable_len={config['variable_len']}\n"
+        f"range_L={config['range_L']}\nrange_R={config['range_R']}\n"
+        f"xp_min={config.get('xp_min', _dv('xp_min'))}\n"
+        f"xd_min={config.get('xd_min', _dv('xd_min'))}\n"
+        f"collect_mode={config.get('collect_mode', _dv('collect_mode'))}\n"
+        f"output_xp={config.get('output_xp', _dv('output_xp'))}\n"
+        f"output_log={config.get('output_log', _dv('output_log'))}\n"
+        f"output_speed={config.get('output_speed', _dv('output_speed'))}\n"
+        f"debug_mode={config.get('debug_mode', _dv('debug_mode'))}\n"
         f"result_file={result_file}\n"
     )
     # A1: seed 传递 (config 有 seed 才传; 缺失则引擎用时间熵, 单机行为不变)
@@ -107,11 +121,22 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
         params += f"seed={config['seed']}\n"
     if config.get("collect_mode") == 2:
         params += (
-            f"c_eight_v_min={config.get('c_eight_v_min', 0)}\n"
-            f"c_seven_v_min={config.get('c_seven_v_min', 0)}\n"
-            f"c_hl_min={config.get('c_hl_min', 0)}\n"
-            f"c_hp398_min={config.get('c_hp398_min', 0)}\n"
+            f"c_eight_v_min={config.get('c_eight_v_min', _dv('c_eight_v_min'))}\n"
+            f"c_seven_v_min={config.get('c_seven_v_min', _dv('c_seven_v_min'))}\n"
+            f"c_hl_min={config.get('c_hl_min', _dv('c_hl_min'))}\n"
+            f"c_hp398_min={config.get('c_hp398_min', _dv('c_hp398_min'))}\n"
         )
+
+    # 自检: 所有生成的 engine key 必须在 ALL_ENGINE_KEYS 中注册
+    # (仅 debug_mode 开启时检查，避免影响性能)
+    if config.get("debug_mode"):
+        for line in params.strip().split("\n"):
+            if "=" in line:
+                key = line.split("=", 1)[0]
+                if key not in ALL_ENGINE_KEYS:
+                    print(f"[engine] WARNING: unknown engine key '{key}' — "
+                          f"not in CONFIG_MAP or _ENGINE_KEYS_COMPUTED", file=sys.stderr)
+
     return params
 
 
@@ -234,7 +259,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
                 "max_sum": max_sum, "found": found, "speed": speed}
 
     # 回退路径 (无摘要)
-    rng = config["range_end"] - config["range_start"]
+    rng = config["range_R"] - config["range_L"]
     speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
     return {"results": results, "max_xp": mxp, "max_xd": mxd,
             "max_sum": 0, "found": len(results), "speed": speed}

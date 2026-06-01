@@ -34,34 +34,32 @@ inline int charset_len = 0;
 // 不处理 1-2 字节字符 (扩展汉字通常在 U+3400 以上)。
 // 参数: start/end — Unicode 码点区间 (含两端)
 inline void load_exhanzi(int start, int end) {
-  for (int codepoint = start; codepoint <= end; codepoint++) {
+  for (int cp = start; cp <= end; cp++) {
     unsigned char utf8[4];
     int len = 0;
-    // 标准 UTF-8 编码 (参见 RFC 3629)
-    if (codepoint <= 0x7F) {
-      utf8[len++] = codepoint;
-    } else if (codepoint <= 0x7FF) {
-      utf8[len++] = 0xC0 | (codepoint >> 6);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
-    } else if (codepoint <= 0xFFFF) {
-      utf8[len++] = 0xE0 | (codepoint >> 12);
-      utf8[len++] = 0x80 | ((codepoint >> 6) & 0x3F);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
-    } else if (codepoint <= 0x10FFFF) {
-      utf8[len++] = 0xF0 | (codepoint >> 18);
-      utf8[len++] = 0x80 | ((codepoint >> 12) & 0x3F);
-      utf8[len++] = 0x80 | ((codepoint >> 6) & 0x3F);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
+    if (cp <= 0x7F) {
+      utf8[len++] = cp;
+    } else if (cp <= 0x7FF) {
+      utf8[len++] = 0xC0 | (cp >> 6);
+      utf8[len++] = 0x80 | (cp & 0x3F);
+    } else if (cp <= 0xFFFF) {
+      utf8[len++] = 0xE0 | (cp >> 12);
+      utf8[len++] = 0x80 | ((cp >> 6) & 0x3F);
+      utf8[len++] = 0x80 | (cp & 0x3F);
+    } else if (cp <= 0x10FFFF) {
+      utf8[len++] = 0xF0 | (cp >> 18);
+      utf8[len++] = 0x80 | ((cp >> 12) & 0x3F);
+      utf8[len++] = 0x80 | ((cp >> 6) & 0x3F);
+      utf8[len++] = 0x80 | (cp & 0x3F);
     }
     if (len == 4) {
       hanzi_len_4++;
-      for (int i = 0; i < len; i++)
-        hanzi_4[++hanzi_cnt_4] = utf8[i];
-    }
-    if (len == 3) {
+      memcpy(&hanzi_4[hanzi_cnt_4 + 1], utf8, len);
+      hanzi_cnt_4 += len;
+    } else if (len == 3) {
       hanzi_len_3++;
-      for (int i = 0; i < len; i++)
-        hanzi_3[++hanzi_cnt_3] = utf8[i];
+      memcpy(&hanzi_3[hanzi_cnt_3 + 1], utf8, len);
+      hanzi_cnt_3 += len;
     }
   }
 }
@@ -92,30 +90,29 @@ inline void init_exhanzi() {
 // 注意: 此函数直接写入全局 charset 缓冲区，使用前应先 reset_charset()。
 inline void reset_charset() { charset_cnt = -1; charset_len = 0; }
 inline void load_hanzi(int start, int end) {
-  for (int codepoint = start; codepoint <= end; codepoint++) {
+  for (int cp = start; cp <= end; cp++) {
     unsigned char utf8[4];
     int len = 0;
-    if (codepoint <= 0x7F) {
-      utf8[len++] = codepoint;
-    } else if (codepoint <= 0x7FF) {
-      utf8[len++] = 0xC0 | (codepoint >> 6);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
-    } else if (codepoint <= 0xFFFF) {
-      utf8[len++] = 0xE0 | (codepoint >> 12);
-      utf8[len++] = 0x80 | ((codepoint >> 6) & 0x3F);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
-    } else if (codepoint <= 0x10FFFF) {
-      utf8[len++] = 0xF0 | (codepoint >> 18);
-      utf8[len++] = 0x80 | ((codepoint >> 12) & 0x3F);
-      utf8[len++] = 0x80 | ((codepoint >> 6) & 0x3F);
-      utf8[len++] = 0x80 | (codepoint & 0x3F);
+    if (cp <= 0x7F) {
+      utf8[len++] = cp;
+    } else if (cp <= 0x7FF) {
+      utf8[len++] = 0xC0 | (cp >> 6);
+      utf8[len++] = 0x80 | (cp & 0x3F);
+    } else if (cp <= 0xFFFF) {
+      utf8[len++] = 0xE0 | (cp >> 12);
+      utf8[len++] = 0x80 | ((cp >> 6) & 0x3F);
+      utf8[len++] = 0x80 | (cp & 0x3F);
+    } else if (cp <= 0x10FFFF) {
+      utf8[len++] = 0xF0 | (cp >> 18);
+      utf8[len++] = 0x80 | ((cp >> 12) & 0x3F);
+      utf8[len++] = 0x80 | ((cp >> 6) & 0x3F);
+      utf8[len++] = 0x80 | (cp & 0x3F);
     }
     if (len == 4)
       fprintf(stderr, "WARNING!!! 4-byte char in load_hanzi\n");
     charset_len++;
-    for (int i = 0; i < len; i++) {
-      charset[++charset_cnt] = utf8[i];
-    }
+    memcpy(&charset[charset_cnt + 1], utf8, len);
+    charset_cnt += len;
   }
 }
 
@@ -146,13 +143,31 @@ inline int load_unicode_codepoint(int codepoint, char* out_buf) {
 }
 
 // ===== load_unicode_range: 加载 Unicode 码点区间到 charset 缓冲区 =====
-// 对区间内每个码点调用 load_unicode_codepoint 并追加到全局 charset。
+// 内联 UTF-8 编码 + memcpy 批量写入，避免逐码点函数调用。
 inline void load_unicode_range(int start, int end) {
-  for (int codepoint = start; codepoint <= end; codepoint++) {
+  for (int cp = start; cp <= end; cp++) {
     char buf[4];
-    int len = load_unicode_codepoint(codepoint, buf);
+    int len;
+    if (cp <= 0x7F) {
+      buf[0] = cp; len = 1;
+    } else if (cp <= 0x7FF) {
+      buf[0] = 0xC0 | (cp >> 6);
+      buf[1] = 0x80 | (cp & 0x3F);
+      len = 2;
+    } else if (cp <= 0xFFFF) {
+      buf[0] = 0xE0 | (cp >> 12);
+      buf[1] = 0x80 | ((cp >> 6) & 0x3F);
+      buf[2] = 0x80 | (cp & 0x3F);
+      len = 3;
+    } else if (cp <= 0x10FFFF) {
+      buf[0] = 0xF0 | (cp >> 18);
+      buf[1] = 0x80 | ((cp >> 12) & 0x3F);
+      buf[2] = 0x80 | ((cp >> 6) & 0x3F);
+      buf[3] = 0x80 | (cp & 0x3F);
+      len = 4;
+    } else { continue; }
     charset_len++;
-    for (int i = 0; i < len; i++)
-      charset[++charset_cnt] = buf[i];
+    memcpy(&charset[charset_cnt + 1], buf, len);
+    charset_cnt += len;
   }
 }
