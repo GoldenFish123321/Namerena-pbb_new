@@ -102,7 +102,7 @@ def _detect_simd(compiler):
     return ([], "none")
 
 
-def _gcc_arch_flags(compiler):
+def _gcc_arch_flags(compiler, verbose=False):
     """Detect GCC -march support. znver5 for Zen5, fallback to native/generic."""
     arch = "znver5"
     flag = f"-march={arch}"
@@ -111,14 +111,16 @@ def _gcc_arch_flags(compiler):
 
     fallback = "-march=native"
     if _compiler_probe(compiler, fallback):
-        print(f"[build] WARNING: {compiler} 不支持 {flag}; 使用 {fallback}", file=sys.stderr)
+        if verbose:
+            print(f"[build] WARNING: {compiler} 不支持 {flag}; 使用 {fallback}", file=sys.stderr)
         return [fallback], ", march=native"
 
-    print(f"[build] WARNING: {compiler} 不支持 -march; 跳过 CPU 优化", file=sys.stderr)
+    if verbose:
+        print(f"[build] WARNING: {compiler} 不支持 -march; 跳过 CPU 优化", file=sys.stderr)
     return [], ""
 
 
-def _find_compilers():
+def _find_compilers(verbose=False):
     """Detect all available compilers, return in performance order.
     Each entry: (name, flags, simd_name, is_msvc).
     Order: icpx > g++ > cl, regardless of platform or target.
@@ -159,7 +161,7 @@ def _find_compilers():
 
     if gpp:
         base = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
-        arch_flags, arch_name = _gcc_arch_flags("g++")
+        arch_flags, arch_name = _gcc_arch_flags("g++", verbose)
         simd_flags, simd_name = _detect_simd("g++")
         entries.append(("g++", base + arch_flags + simd_flags, simd_name + arch_name, False))
 
@@ -228,7 +230,7 @@ def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
 def _compile_pbb_core(verbose=False):
     """Compile bridge.cpp → pbb_core.{so,pyd}. Tries compilers in priority order."""
     import pybind11
-    compilers = _find_compilers()  # icpx > g++ > cl
+    compilers = _find_compilers(verbose)  # icpx > g++ > cl
     # Windows: skip g++ for pbb_core (MinGW ABI incompatible with MSVC Python)
     if sys.platform == "win32":
         compilers = [c for c in compilers if "g++" not in str(c[0])]
@@ -266,7 +268,7 @@ def _compile_pbb_core(verbose=False):
 
 def _compile_engine(verbose=False):
     """Compile engine_main.cpp → pbb_engine. Tries compilers in priority order."""
-    compilers = _find_compilers()  # g++ preferred for engine
+    compilers = _find_compilers(verbose)
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
@@ -292,7 +294,7 @@ def _compile_engine(verbose=False):
     sys.exit(1)
 
 
-def _env_info():
+def _env_info(verbose=False):
     """Print environment summary: OS, CPU, Python, available compilers + SIMD."""
     import platform
     print(f"[env] OS: {sys.platform} {platform.machine()}", file=sys.stderr)
@@ -305,7 +307,7 @@ def _env_info():
     print(f"[env] Python: {sys.version.split()[0]}", file=sys.stderr)
 
     # Show all detected compilers with their SIMD levels
-    compilers = _find_compilers()
+    compilers = _find_compilers(verbose)
     names = []
     for name, flags, simd_name, is_msvc in compilers:
         names.append(f"{name}({simd_name})")
@@ -316,7 +318,7 @@ def ensure_all(rebuild=False, verbose=False):
     check_python()
     check_deps()
     os.chdir(BASE_DIR)
-    _env_info()
+    _env_info(verbose)
 
     if rebuild or not _pbb_core_exists():
         _compile_pbb_core(verbose)
