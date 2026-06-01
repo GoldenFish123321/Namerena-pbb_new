@@ -22,6 +22,7 @@ run.bat -y -c config.yaml        # Windows 跳过确认
 支持 **JSON / YAML / TOML** 三种格式，扩展名自动识别。不指定 `-c` 时依次尝试 `config.json → config.yaml → config.toml`。
 
 ```yaml
+debug_mode: 0                   # 0=关闭 1=开启 (--debug 启用)
 team_name: "test"
 prefixes:
   - name: "test-"               # '+' = 无前缀
@@ -131,19 +132,25 @@ python3 main.py -c config.yaml \
 
 编译器按性能优先级自动选择，编译失败自动回退：
 
-| 平台 | engine 编译器优先级 | 指令集 |
-|------|--------------------|--------|
-| Linux x86_64 | icpx → g++ | AVX-512 > AVX2 |
-| Linux ARM / Termux | g++ | NEON (128bit) |
-| Windows x86_64 | icpx → g++ → MSVC | AVX-512 > AVX2 |
+| 平台 | engine 编译器优先级 | pbb_core 编译器优先级 | 指令集 |
+|------|--------------------|----------------------|--------|
+| Linux x86_64 | icpx → g++ | icpx → g++ | AVX-512 > AVX2 |
+| Linux ARM / Termux | g++ | g++ | NEON (128bit) |
+| Windows x86_64 | icpx → g++ → MSVC | icpx → MSVC | AVX2 (icpx 固定) |
 
-`pbb_core`（Python 扩展模块）在 Windows 上优先用 MSVC（Python ABI 兼容）。
+> Windows icpx 固定 `-xCORE-AVX2`。`-xHost` 在 Arrow Lake 上仍导致 LLVM 编译期 crash（2026-06-01 确认）。pbb_core 排除 g++（MinGW ABI 不兼容 Python）。
 
-编译和运行时会打印 SIMD 级别：
+编译输出（正常模式简洁，`--debug` 显示完整命令）：
 
 ```
-[build] SIMD: AVX-512
-[engine] SIMD: AVX-512
+[build] pbb_core: icpx (AVX2)
+[build] engine: icpx (AVX2)
+```
+
+运行时会打印 SIMD 级别：
+
+```
+[engine] SIMD: AVX2
 ```
 
 ## 进度显示
