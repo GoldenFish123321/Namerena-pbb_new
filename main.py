@@ -4,8 +4,9 @@ PBB 名字评分测号器 — Python 编排层.
 
 职责:
   1. 解析配置文件 (JSON/YAML/TOML 三格式) + 命令行覆盖
-  2. 调用 engine.run() 启动 C++ 子进程
-  3. 统计并输出结果
+  2. 校验配置合法性
+  3. 调用 engine.run() 启动 C++ 子进程
+  4. 统计并输出结果
 
 编译由 build.py 负责, 依赖由 run.sh/run.bat 安装到 .venv。
 
@@ -52,6 +53,131 @@ def _print_results(results: list, output_xp: int):
             print(f"{r['name']} {r['xp']} {r['xd']}")
         else:
             print(r["name"])
+
+
+def _die(msg: str):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _validate_config(cfg: dict):
+    """校验配置字段合法性, 不合法立即退出."""
+    # ── debug_mode ──
+    dm = cfg.get("debug_mode", 0)
+    if dm not in (0, 1):
+        _die(f"debug_mode 必须为 0 或 1, 当前: {dm}")
+
+    # ── team_name ──
+    tn = cfg.get("team_name", "")
+    if not tn or not isinstance(tn, str):
+        _die("team_name 不能为空")
+
+    # ── prefixes ──
+    pfx = cfg.get("prefixes", [])
+    if not isinstance(pfx, list) or not pfx:
+        _die("prefixes 至少需要一个元素")
+    for i, p in enumerate(pfx):
+        if not isinstance(p.get("name"), str):
+            _die(f"prefixes[{i}].name 必须为字符串")
+
+    # ── suffixes ──
+    sfx = cfg.get("suffixes", [])
+    if not isinstance(sfx, list) or not sfx:
+        _die("suffixes 至少需要一个元素")
+    for i, s in enumerate(sfx):
+        if not isinstance(s.get("name"), str):
+            _die(f"suffixes[{i}].name 必须为字符串")
+
+    # ── character_set ──
+    cs = cfg.get("character_set", {})
+    scl = cs.get("single_char_length")
+    if scl not in (1, 2, 3, 4):
+        _die(f"character_set.single_char_length 必须为 1/2/3/4, 当前: {scl}")
+
+    types = cs.get("types", [])
+    if not isinstance(types, list) or not types:
+        _die("character_set.types 至少需要一个类型")
+    scl_type_max = {1: 5, 2: 8, 3: 8, 4: 3}
+    tmax = scl_type_max[scl]
+    for t in types:
+        if not isinstance(t, int) or t < 1 or t > tmax:
+            _die(f"character_set.types: scl={scl} 时 type 必须为 1~{tmax}, 当前: {t}")
+
+    custom = cs.get("custom_values")
+    if custom is not None:
+        if not isinstance(custom, (str, list)):
+            _die("character_set.custom_values 必须为字符串或数字列表")
+        if isinstance(custom, str) and len(custom) == 0:
+            _die("character_set.custom_values 不能为空字符串")
+        if isinstance(custom, list) and len(custom) == 0:
+            _die("character_set.custom_values 不能为空列表")
+
+    # ── enumeration ──
+    en = cfg.get("enumeration", {})
+    mode = en.get("mode")
+    if mode not in (1, 2, 3, 4):
+        _die(f"enumeration.mode 必须为 1/2/3/4, 当前: {mode}")
+
+    vlen = en.get("variable_length")
+    if not isinstance(vlen, int) or vlen < 1 or vlen > 16:
+        _die(f"enumeration.variable_length 必须为 1~16, 当前: {vlen}")
+
+    ranges = en.get("ranges", [])
+    if not isinstance(ranges, list) or not ranges:
+        _die("enumeration.ranges 至少需要一个区间")
+    for i, r in enumerate(ranges):
+        start = r.get("start", 0)
+        end = r.get("end", int(1e18))
+        if not isinstance(start, int) or start < 0:
+            _die(f"enumeration.ranges[{i}].start 必须 >= 0, 当前: {start}")
+        if not isinstance(end, int) or (end != -1 and end <= start):
+            _die(f"enumeration.ranges[{i}].end 必须 > start (或 -1=无限), 当前: end={end} start={start}")
+
+    # ── collection ──
+    cl = cfg.get("collection", {})
+    xpm = cl.get("xp_min")
+    if not isinstance(xpm, int) or xpm < 0 or xpm > 9999:
+        _die(f"collection.xp_min 必须为 0~9999, 当前: {xpm}")
+
+    xdm = cl.get("xd_min")
+    if not isinstance(xdm, int) or xdm < 0 or xdm > 9999:
+        _die(f"collection.xd_min 必须为 0~9999, 当前: {xdm}")
+
+    cm = cl.get("collect_mode", 0)
+    if cm not in (0, 1, 2):
+        _die(f"collection.collect_mode 必须为 0/1/2, 当前: {cm}")
+
+    if cm == 2:
+        st = cl.get("special_thresholds", {})
+        for key, label, vmax in [
+            ("eight_v_min", "八围最低", 999),
+            ("seven_v_min", "七围最低", 999),
+            ("hl_min", "HL 最低", 99),
+            ("hp398_eight_v_min", "HP398 八围最低", 999),
+        ]:
+            v = st.get(key)
+            if v is not None and (not isinstance(v, int) or v < 0 or v > vmax):
+                _die(f"collection.special_thresholds.{key} ({label}) 必须为 0~{vmax}, 当前: {v}")
+
+    # ── output ──
+    out = cfg.get("output", {})
+    ox = out.get("output_xp", 1)
+    if ox not in (0, 1):
+        _die(f"output.output_xp 必须为 0 或 1, 当前: {ox}")
+
+    ol = out.get("log_output", 1)
+    if ol not in (0, 1):
+        _die(f"output.log_output 必须为 0 或 1, 当前: {ol}")
+
+    os_ = out.get("speed_output", 1)
+    if os_ not in (0, 1):
+        _die(f"output.speed_output 必须为 0 或 1, 当前: {os_}")
+
+    # ── threads ──
+    th = cfg.get("threads", {})
+    wt = th.get("worker_threads", -1)
+    if not isinstance(wt, int) or wt < -1 or wt == 0 or wt > 256:
+        _die(f"threads.worker_threads 必须为 -1(自动) 或 1~256, 当前: {wt}")
 
 
 def main():
@@ -112,6 +238,9 @@ def main():
     else:
         with open(config_path, encoding="utf-8") as f: cfg = json.load(f)
 
+    # ── 3.5 配置合法性校验 ──
+    _validate_config(cfg)
+
     # ── 4. 组装引擎配置 (配置文件 + CLI 覆盖) ──
     en = cfg["enumeration"]
     cl = cfg["collection"]
@@ -137,6 +266,7 @@ def main():
         "range_start":    rng.get("start", 0),
         "range_end":      rng.get("end", int(1e18)),
         "xp_min":         cl["xp_min"],
+        "xd_min":         cl["xd_min"],
         "collect_mode":   cl.get("collect_mode", 0),
         "output_xp":      out_cfg.get("output_xp", 1),
         "output_log":     out_cfg.get("log_output", 1),
