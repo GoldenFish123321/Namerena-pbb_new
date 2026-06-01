@@ -104,21 +104,21 @@ def _find_compilers(for_core=False):
       - Engine (for_core=False) picks best available compiler.
         Linux:   icpx (-xHost) → g++
         ARM:     g++ (NEON mandatory)
-        Windows: g++ (AVX-512) → cl
-      - icpx excluded from Windows: LLVM crash on pybind11, runtime DLL issues.
+        Windows: icpx (-xHost) → g++ (AVX-512) → cl
     """
     result = []
     is_win = sys.platform == "win32"
 
-    # icpx — Linux only (not on Windows)
-    icpx = None
-    if not is_win:
-        icpx = shutil.which("icpx")
-        if not icpx:
-            for d in ["/opt/intel/oneapi"]:
-                for ver in ["latest", "2026.0", "2025.0"]:
-                    p = os.path.join(d, "compiler", ver, "bin", "icpx")
-                    if os.path.exists(p): icpx = p; break
+    # Find icpx binary (Linux + Windows)
+    icpx = shutil.which("icpx")
+    if not icpx:
+        paths = [r"C:\Program Files (x86)\Intel\oneAPI", r"C:\Program Files\Intel\oneAPI",
+                 "/opt/intel/oneapi"]
+        for d in paths:
+            for ver in ["latest", "2026.0", "2025.0"]:
+                p = os.path.join(d, "compiler", ver, "bin",
+                                 "icpx.exe" if is_win else "icpx")
+                if os.path.exists(p): icpx = p; break
 
     if for_core and is_win:
         # pbb_core on Windows: cl only (Python ABI)
@@ -128,7 +128,12 @@ def _find_compilers(for_core=False):
         return result
 
     if is_win:
-        # engine on Windows: g++ → cl
+        # Windows engine: icpx (-xHost) → g++ (AVX-512) → cl
+        if icpx:
+            flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
+                     "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
+                     "-qopenmp", "-xHost", "-finline-functions"]
+            result.append((icpx, flags, "auto (-xHost)", False))
         if shutil.which("g++"):
             base_flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
             simd_flags, simd_name = _detect_simd("g++")
