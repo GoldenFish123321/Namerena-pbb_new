@@ -55,9 +55,10 @@ mode = 1
 variable_length = 8
 
 # mode 1: 枚举区间; mode 2/3/4: chunk 数 = (end-start)/1M
+# end=-1 → 几乎无限 (1.8×10^19)
 [[enumeration.ranges]]
 start = 0         # 起始编号 (含)
-end = 100000000   # 结束编号 (不含), 100M = 约 1~2 分钟
+end = 100000000   # 结束编号 (不含), -1 = 无限, 100M = 约 1~2 分钟
 
 # ──────── 收集阈值 ────────
 [collection]

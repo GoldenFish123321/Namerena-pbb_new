@@ -77,6 +77,7 @@ threads:
 - **随机范围** = `charset 字符数 ^ variable_length`（自动计算）
 - 例：10 个 emoji + `variable_length: 4` → 范围 = 10⁴ = 10000
 - `ranges[0].end` 设大一些获得更多采样（如 100M = 100 chunks = 1 亿次随机）
+- `ranges[0].end: -1` → 几乎无限（`uint64_t` 最大值 ≈ 1.8×10^19）
 
 > mode 2/3/4 配合 `seed` 可实现**确定性随机**——同 seed + 同 range → 任意线程数下结果完全一致。
 

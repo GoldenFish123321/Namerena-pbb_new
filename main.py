@@ -137,7 +137,6 @@ def main():
         "range_start":    rng.get("start", 0),
         "range_end":      rng.get("end", int(1e18)),
         "xp_min":         cl["xp_min"],
-        "xd_min":         cl["xd_min"],
         "collect_mode":   cl.get("collect_mode", 0),
         "output_xp":      out_cfg.get("output_xp", 1),
         "output_log":     out_cfg.get("log_output", 1),
@@ -145,6 +144,9 @@ def main():
         "debug_mode":     cfg.get("debug_mode", 0),
         "n_threads":      cfg["threads"]["worker_threads"],
     }
+    # -1 = 几乎无限 (uint64_t max ≈ 1.8×10^19)
+    if task_config["range_end"] == -1:
+        task_config["range_end"] = 2**64 - 1
     # collect_mode=2: 阈值
     if task_config["collect_mode"] == 2:
         st = cl.get("special_thresholds", {})

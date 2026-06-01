@@ -60,7 +60,7 @@
       {
         "start": 0,
         "end": 100000000,
-        "_comment": "mode 1: 枚举区间; mode 2/3/4: chunk 数=(end-start)/1M, 每个 chunk 1M 个随机名"
+        "_comment": "end=-1 → 几乎无限(1.8×10^19); mode 1=枚举区间; mode 2/3/4: chunk数=(end-start)/1M"
       }
     ],
     "_comment_ranges": "多个前缀共享此区间, end 必须为有限值"
