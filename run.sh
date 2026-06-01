@@ -78,14 +78,12 @@ else
     _pip="python3 -m pip install --quiet --break-system-packages"
 fi
 
-# 安装依赖 (仅首次 .venv 或 venv 不可用时)
-if [ ! -f .venv/bin/python3 ]; then
-    $_pip pyyaml setuptools pybind11  || {
-        echo "WARNING: pip install 失败, 请检查网络" >&2
-    }
-    if [ "$(python3 -c 'import sys; print(sys.version_info.minor)')" -lt 11 ]; then
-        $_pip tomli 2>/dev/null || true
-    fi
+# 安装依赖
+$_pip pyyaml setuptools pybind11 2>/dev/null || {
+    echo "WARNING: pip install 失败, 请检查网络" >&2
+}
+if [ "$(python3 -c 'import sys; print(sys.version_info.minor)')" -lt 11 ]; then
+    $_pip tomli 2>/dev/null || true
 fi
 
 # ── 启动 ──
