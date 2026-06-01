@@ -50,11 +50,56 @@ static inline void sort10(u8_t* arr) {
     #undef SWAP
 }
 
-#if PBB_HAS_AVX2
-// ===== SIMD: val[i] = (val[i] * mul + add) & 0xFF, 处理 256 字节 =====
-// 用于 loading_name 中的属性评分 (mul=181, add=160)。
-// AVX2 一次处理 32 字节，8 次迭代覆盖全部 256 字节。
-// 步骤: byte→int16 扩展 → 乘法 → 加法 → &0xFF → 打包回 byte
+// ===== SIMD ual 计算: val[i] = (val[i] * mul + add) & 0xFF =====
+// 按指令集层级选择最优实现: AVX-512 (64B/iter) > AVX2 (32B/iter) > NEON (16B/iter)
+#if PBB_HAS_AVX512
+// ---- AVX-512: 4 次迭代覆盖 256 字节 ----
+static inline void simd_mul_add(const u8_t* __restrict__ val, u8_t* __restrict__ ual,
+                                 u8_t mul, u8_t add) {
+  const __m512i vmul = _mm512_set1_epi16(mul);
+  const __m512i vadd = _mm512_set1_epi16(add);
+  const __m512i vmask = _mm512_set1_epi16(0xFF);
+  const __m512i vzero = _mm512_setzero_si512();
+  for (int i = 0; i < 256; i += 64) {
+    __m512i v = _mm512_loadu_si512((const __m512i*)&val[i]);
+    __m512i lo = _mm512_unpacklo_epi8(v, vzero);
+    __m512i hi = _mm512_unpackhi_epi8(v, vzero);
+    lo = _mm512_mullo_epi16(lo, vmul);
+    hi = _mm512_mullo_epi16(hi, vmul);
+    lo = _mm512_add_epi16(lo, vadd);
+    hi = _mm512_add_epi16(hi, vadd);
+    lo = _mm512_and_si512(lo, vmask);
+    hi = _mm512_and_si512(hi, vmask);
+    __m512i res = _mm512_packus_epi16(lo, hi);
+    _mm512_storeu_si512((__m512i*)&ual[i], res);
+  }
+}
+
+static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
+                                      u8_t* __restrict__ ual_attr,
+                                      u8_t* __restrict__ ual_skill) {
+  const __m512i vmul  = _mm512_set1_epi16(181);
+  const __m512i vaddA = _mm512_set1_epi16(160);
+  const __m512i vaddS = _mm512_set1_epi16(71);
+  const __m512i vmask = _mm512_set1_epi16(0xFF);
+  const __m512i vzero = _mm512_setzero_si512();
+  for (int i = 0; i < 256; i += 64) {
+    __m512i v = _mm512_loadu_si512((const __m512i*)&val[i]);
+    __m512i lo = _mm512_unpacklo_epi8(v, vzero);
+    __m512i hi = _mm512_unpackhi_epi8(v, vzero);
+    __m512i loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
+    __m512i hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
+    __m512i loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
+    __m512i hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
+    loA = _mm512_and_si512(loA, vmask); hiA = _mm512_and_si512(hiA, vmask);
+    loS = _mm512_and_si512(loS, vmask); hiS = _mm512_and_si512(hiS, vmask);
+    _mm512_storeu_si512((__m512i*)&ual_attr[i], _mm512_packus_epi16(loA, hiA));
+    _mm512_storeu_si512((__m512i*)&ual_skill[i], _mm512_packus_epi16(loS, hiS));
+  }
+}
+
+#elif PBB_HAS_AVX2
+// ---- AVX2: 8 次迭代覆盖 256 字节 ----
 static inline void simd_mul_add(const u8_t* __restrict__ val, u8_t* __restrict__ ual,
                                  u8_t mul, u8_t add) {
   const __m256i vmul = _mm256_set1_epi16(mul);
@@ -76,11 +121,6 @@ static inline void simd_mul_add(const u8_t* __restrict__ val, u8_t* __restrict__
   }
 }
 
-// ===== 双输出 SIMD: 同时计算属性 ual (add=160) 和技能 ual (add=71) =====
-// 用于 load_name 中，一次遍历同时生成两个结果数组，减少内存访问。
-// mul 固定为 181 (RC4 变换常量)。
-// ual_attr: 用于 V 值计算和属性评分 (filter: 89 <= val < 217)
-// ual_skill: 用于技能分布计算 (filter: val & 0x80 == 0)
 static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
                                       u8_t* __restrict__ ual_attr,
                                       u8_t* __restrict__ ual_skill) {
@@ -101,6 +141,50 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
     loS = _mm256_and_si256(loS, vmask);  hiS = _mm256_and_si256(hiS, vmask);
     _mm256_storeu_si256((__m256i*)&ual_attr[i], _mm256_packus_epi16(loA, hiA));
     _mm256_storeu_si256((__m256i*)&ual_skill[i], _mm256_packus_epi16(loS, hiS));
+  }
+}
+
+#elif PBB_HAS_NEON
+// ---- ARM NEON: 16 次迭代覆盖 256 字节 ----
+static inline void simd_mul_add(const u8_t* __restrict__ val, u8_t* __restrict__ ual,
+                                 u8_t mul, u8_t add) {
+  const uint16x8_t vmul = vdupq_n_u16(mul);
+  const uint16x8_t vadd = vdupq_n_u16(add);
+  const uint16x8_t vmask = vdupq_n_u16(0xFF);
+  for (int i = 0; i < 256; i += 16) {
+    uint8x16_t v = vld1q_u8(&val[i]);
+    uint16x8_t lo = vmovl_u8(vget_low_u8(v));
+    uint16x8_t hi = vmovl_u8(vget_high_u8(v));
+    lo = vmulq_u16(lo, vmul);
+    hi = vmulq_u16(hi, vmul);
+    lo = vaddq_u16(lo, vadd);
+    hi = vaddq_u16(hi, vadd);
+    lo = vandq_u16(lo, vmask);
+    hi = vandq_u16(hi, vmask);
+    uint8x16_t res = vcombine_u8(vqmovn_u16(lo), vqmovn_u16(hi));
+    vst1q_u8(&ual[i], res);
+  }
+}
+
+static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
+                                      u8_t* __restrict__ ual_attr,
+                                      u8_t* __restrict__ ual_skill) {
+  const uint16x8_t vmul  = vdupq_n_u16(181);
+  const uint16x8_t vaddA = vdupq_n_u16(160);
+  const uint16x8_t vaddS = vdupq_n_u16(71);
+  const uint16x8_t vmask = vdupq_n_u16(0xFF);
+  for (int i = 0; i < 256; i += 16) {
+    uint8x16_t v = vld1q_u8(&val[i]);
+    uint16x8_t lo = vmovl_u8(vget_low_u8(v));
+    uint16x8_t hi = vmovl_u8(vget_high_u8(v));
+    uint16x8_t loA = vaddq_u16(vmulq_u16(lo, vmul), vaddA);
+    uint16x8_t hiA = vaddq_u16(vmulq_u16(hi, vmul), vaddA);
+    uint16x8_t loS = vaddq_u16(vmulq_u16(lo, vmul), vaddS);
+    uint16x8_t hiS = vaddq_u16(vmulq_u16(hi, vmul), vaddS);
+    loA = vandq_u16(loA, vmask); hiA = vandq_u16(hiA, vmask);
+    loS = vandq_u16(loS, vmask); hiS = vandq_u16(hiS, vmask);
+    vst1q_u8(&ual_attr[i], vcombine_u8(vqmovn_u16(loA), vqmovn_u16(hiA)));
+    vst1q_u8(&ual_skill[i], vcombine_u8(vqmovn_u16(loS), vqmovn_u16(hiS)));
   }
 }
 #endif

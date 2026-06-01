@@ -120,6 +120,9 @@ inline int engine_main(int argc,char**argv){
     // ---- Consumer: 处理任务 (编码 + RC4 + 评分) ----
     auto cons=[&](int cid){Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));std::mt19937_64 rng(rng_global()+cid*1234567);TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
+        const char* cb=cbytes.data();  // 局部缓存指针
+        // 编码宏: 全内联, 编译器在 scl==4 分支将 memcpy(...,4) 优化为单条 mov
+        #define ENC(dst,ci) do{const char*_s=cb+(ci)*scl;if(scl==4)memcpy((dst),_s,4);else if(scl==1)*(dst)=*_s;else if(scl==2)memcpy((dst),_s,2);else if(scl==3)memcpy((dst),_s,3);else memcpy((dst),_s,scl);}while(0)
         while(q_get(q,t)){
             // 构建名字缓冲区: prefix + 占位 + suffix
             const std::string&p=prefixes[(t.prefix_id-1)%np];const std::string&s=suffixes[(t.suffix_id-1)%ns];
@@ -128,7 +131,7 @@ inline int engine_main(int argc,char**argv){
             if(slen)memcpy(buf+plen+vlen*scl,s.data(),slen);
             uint64_t L=t.L,R=t.R;int evar=vlen,epre=plen;
             if(mode>=2){
-                int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);}
+                int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
                 epre+=extra*scl;evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
                 if(mode==2||mode==4){L=rng()%random_range_max;R=L+NUMBER_PER_TASK;}
             }else{
@@ -136,13 +139,13 @@ inline int engine_main(int argc,char**argv){
                 now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
                 now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
                 int up=0;while(up<vlen&&dl[up]==dr[up])up++;
-                now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;memcpy(buf+epre+d*scl,cbytes.data()+ci*scl,scl);now/=clen;}
+                now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf+epre+d*scl,ci);now/=clen;}
                 epre+=up*scl;evar-=up;
             }
             // 热路径: 编码 → score_full
             if(mode==3){
                 for(uint64_t i=L;i<R;i++){
-                    for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);}
+                    for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
                     ScoreResult r=score_full(buf,nlen,name);
                     if(!r.flag)continue;
                     int emin=xpm;if(r.flag3>=50)emin-=300;
@@ -159,7 +162,7 @@ inline int engine_main(int argc,char**argv){
                         if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
                 }
             }else{
-                for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;memcpy(buf+pos,cbytes.data()+ci*scl,scl);now/=clen;}
+                for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf+pos,ci);now/=clen;}
                     ScoreResult r=score_full(buf,nlen,name);
                     if(!r.flag)continue;
                     int emin=xpm;if(r.flag3>=50)emin-=300;

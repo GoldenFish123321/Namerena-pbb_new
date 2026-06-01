@@ -13,6 +13,24 @@
   #define PBB_HAS_AVX2 0
 #endif
 
+// AVX-512: -mavx512f -mavx512bw
+#if defined(__AVX512F__) && defined(__AVX512BW__)
+  #define PBB_HAS_AVX512 1
+#else
+  #define PBB_HAS_AVX512 0
+#endif
+
+// ARM NEON: aarch64 强制特性
+#if defined(__aarch64__) || defined(__ARM_NEON)
+  #include <arm_neon.h>
+  #define PBB_HAS_NEON 1
+#else
+  #define PBB_HAS_NEON 0
+#endif
+
+// 是否存在任意 SIMD 后端
+#define PBB_HAS_SIMD (PBB_HAS_AVX2 || PBB_HAS_AVX512 || PBB_HAS_NEON)
+
 // Windows CRT 安全警告
 #if defined(_WIN32) || defined(_WIN64)
   #ifndef _CRT_SECURE_NO_WARNINGS
@@ -23,7 +41,9 @@
 // 编译器优化指令 (GCC/Clang)
 #if defined(__GNUC__) || defined(__clang__)
   #pragma GCC optimize("Ofast")
-  #if PBB_HAS_AVX2
+  #if PBB_HAS_AVX512
+    #pragma GCC target("avx512f,avx512bw")
+  #elif PBB_HAS_AVX2
     #pragma GCC target("avx2")
   #endif
   #pragma GCC optimize("unroll-loops")

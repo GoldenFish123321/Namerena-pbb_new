@@ -25,7 +25,7 @@ struct alignas(64) Name {
   // ---- RC4 状态数组 ----
   alignas(64) u8_t val[N];          // RC4 S-box (256 字节, 对齐到 64 字节)
   alignas(64) u8_t ual[N];          // val 的线性变换结果 (val*181+160) & 0xFF
-#if PBB_HAS_AVX2
+#if PBB_HAS_SIMD
   alignas(64) u8_t ual_skills[N];   // 技能评分用变换 (val*181+71) & 0xFF
   u8_t saved_val[256];              // AVX2 优化: 保存 load_prefix 后的 val 状态
   bool prefix_loaded;               // 是否已执行 load_prefix (用于 AVX2 快速恢复)
@@ -104,7 +104,7 @@ struct alignas(64) Name {
     s_pre = s;
     if (i_pre == 0)
       j_pre = name_len, s_pre = 0;
-#if PBB_HAS_AVX2
+#if PBB_HAS_SIMD
     memcpy(saved_val, val_base2, sizeof saved_val);
     prefix_loaded = true;
 #endif
@@ -121,7 +121,7 @@ struct alignas(64) Name {
   //   第 4 级: 排序后 + HP 加成 = (154 + sorted[3..6]) / 3
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
-#if PBB_HAS_AVX2
+#if PBB_HAS_SIMD
   void load_name(const char *name, int name_len_hint = 0) {
     q_len = -1;
     u8_t s = s_pre;
@@ -229,7 +229,7 @@ struct alignas(64) Name {
   // 直接用队伍名 KSA 的 val_base，两遍完整 KSA (no prefix)。
   // V 值计算包含全部 7 个属性 (无早退)。
   // 由于名字含 "?shadow" 后缀 (8 字节)，t_len = strlen+1 循环使用这些字节。
-#if PBB_HAS_AVX2
+#if PBB_HAS_SIMD
   void loading_name(const char *name) {
     memcpy(val, val_base, sizeof val);
     q_len = -1;
@@ -312,7 +312,7 @@ struct alignas(64) Name {
   //      - 槽 14/15 有特殊加成 (基于 name_base[60..63])
   //
   // AVX2 路径: ual_skills 已在 load_name 中由 simd_mul_add_dual 预计算。
-#if PBB_HAS_AVX2
+#if PBB_HAS_SIMD
   void calc_skills(const char *name) {
     q_len = -1;
     // 过滤: 高位为 0 的 ual_skills 值 → (val + 89) & 63

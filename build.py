@@ -65,14 +65,23 @@ def _find_compiler():
     if shutil.which("g++"):
         flags = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         if sys.platform != "win32":
-            try:
-                if "avx2" in open("/proc/cpuinfo").read().lower():
-                    flags += ["-mavx2", "-mfma"]
-            except: pass
+            import platform
+            machine = platform.machine()
+            # ARM aarch64: NEON 默认开启
+            if machine.startswith("aarch") or machine.startswith("arm"):
+                pass  # NEON 是 aarch64 强制特性
+            else:
+                try:
+                    cpuinfo = open("/proc/cpuinfo").read().lower()
+                    if "avx512f" in cpuinfo and "avx512bw" in cpuinfo:
+                        flags += ["-mavx512f", "-mavx512bw", "-mfma"]
+                    elif "avx2" in cpuinfo:
+                        flags += ["-mavx2", "-mfma"]
+                except: pass
         return ("g++", flags, False)
 
     if sys.platform == "win32" and shutil.which("cl"):
-        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w"], True)
+        return ("cl", ["/std:c++17", "/Ox", "/EHsc", "/utf-8", "/w", "/arch:AVX2"], True)
 
     return None
 
@@ -94,7 +103,16 @@ def _py_link_flags():
         return [lib] if os.path.exists(lib) else [f"/LIBPATH:{libdir}", f"python{ver}.lib"]
     libdir = sysconfig.get_config_var("LIBDIR") or os.path.join(sys.prefix, "lib")
     ldflags = sysconfig.get_config_var("LDFLAGS") or ""
-    return [f"-L{libdir}"] + ldflags.split()
+    flags = [f"-L{libdir}"] + ldflags.split()
+    # Termux Python 3.13: sysconfig LDFLAGS 缺 -lpython, 用 python3-config 补
+    try:
+        import subprocess
+        pyld = subprocess.run(["python3-config", "--ldflags", "--embed"],
+                              capture_output=True, text=True)
+        if pyld.returncode == 0 and "-lpython" in pyld.stdout:
+            flags += pyld.stdout.strip().split()
+    except: pass
+    return flags
 
 
 def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
