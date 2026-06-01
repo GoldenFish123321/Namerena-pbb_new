@@ -144,6 +144,7 @@ python3 main.py -c config.yaml \
 | `-o` / `--output-file` | `output.result_file` | `-o myrun.txt` / `-o +` |
 | `--output-dest` | (无) 控制输出位置 | `--output-dest stdout` / `--output-dest both` |
 | `--debug` | `debug_mode` | 引擎诊断输出 |
+| `--seed N` | `seed` | 随机种子 (mode 2/3/4 确定性随机) |
 | `--scl` | `character_set.single_char_length` | `--scl 3` |
 | `--types` | `character_set.types` | `--types 1,7` |
 | `--custom-values` | `character_set.custom_values` | `--custom-values "你好"` |
