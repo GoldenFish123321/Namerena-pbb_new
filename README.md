@@ -5,6 +5,10 @@
 ## 快速开始
 
 ```bash
+# 克隆仓库
+git clone https://github.com/GoldenFish123321/Namerena-pbb_new.git
+cd Namerena-pbb_new
+
 # 复制示例配置, 修改参数
 cp config.example.yaml config.yaml
 
