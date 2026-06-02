@@ -167,8 +167,11 @@ python3 main.py -c config.yaml \
 | Linux x86_64 | icpx → g++ | icpx → g++ | AVX-512 > AVX2 |
 | Linux ARM / Termux | g++ | g++ | NEON (128bit) |
 | Windows x86_64 | icpx → g++ → MSVC | icpx → MSVC | AVX2 (icpx 固定) |
+| Windows AMD Zen5 | MSYS2 GCC (→ icpx → MSVC) | 同 engine | AVX2 + `-march=znver5` |
 
 > Windows icpx 固定 `-xCORE-AVX2`。`-xHost` 在 Arrow Lake 上仍导致 LLVM 编译期 crash（2026-06-01 确认）。pbb_core 排除 g++（MinGW ABI 不兼容 Python）。
+>
+> AMD Zen5 用户：`run.bat` 自动检测 `C:\msys64\ucrt64\bin\g++.exe`，检测到后提升 MSYS2 GCC 为最优编译器，`build.py` 自动加 `-march=znver5`。
 
 编译输出（正常模式简洁，`--debug` 显示完整命令）：
 
@@ -290,6 +293,7 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 ├── build.py                  # 编译器检测 + SIMD 探测 + 统一编译
 ├── engine.py                 # 引擎执行: 构建字符集 → Popen → 解析结果
 ├── main.py                   # 编排层: CLI 解析 + 配置加载
+├── config_schema.py          # config→engine 键名映射唯一真相源 (FieldDef + CONFIG_MAP)
 ├── engine_main.cpp           # C++ 引擎入口
 ├── build/                    # 编译产物 (pbb_engine, pbb_core.{so,pyd})
 ├── out/                      # 运行输出 (result_*.txt, blue.txt)
