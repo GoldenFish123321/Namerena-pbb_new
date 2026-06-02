@@ -15,6 +15,16 @@
 //     二阶: x[p] * x[p+q]           (p=0..6, q=1..44-p, 共 990 个)
 //     (具体索引计算见函数内注释)
 // ============================================================================
+// ============================================================================
+// 技能 ID 映射表 (来自 pbb_all.cpp skillNameMap)
+//   0:火球术    1:冰冻术    2:雷击术    3:地裂术    4:吸血攻击  5:投毒
+//   6:连击      7:会心一击  8:瘟疫      9:生命之轮  10:狂暴术   11:魅惑
+//   12:加速术   13:减速术   14:诅咒     15:治愈魔法  16:苏生术   17:净化
+//   18:铁壁     19:蓄力     20:聚气     21:潜行      22:血祭     23:分身
+//   24:幻术     25:防御     26:守护     27:伤害反弹  28:护身符   29:护盾
+//   30:反击     31:吞噬     32:召唤亡灵 33:垂死抗争  34:隐匿
+//   35-39:啧(占位,无实际技能)
+// ============================================================================
 #include "common.hpp"
 #include "model_data.hpp"
 #include "name.hpp"
@@ -28,7 +38,7 @@ struct ScoreResult {
   int skills[16];   // 16 个槽的技能 ID
   int freqs[16];    // 16 个槽的技能频次
   int flag3;        // 特定技能频次和 (用于动态阈值调整: flag3>=50 → XPmin-=300)
-  int shadow;       // 暗影技能值 (xp_x[42], 即技能 34 "治愈魔法" 的频次)
+  int shadow;       // 隐匿技能频次 (xp_x[42], skill ID 34)
   bool flag;        // 是否通过技能标志检查
 };
 
@@ -208,9 +218,9 @@ inline void hanxu_Poly(double *xp, const double *x) {
 //   Step 1: load_name()  → 计算 V 值和 8 个属性 prop[0..7]
 //   Step 2: V 值检查     → 双路径 (高: V*3>=1200, 低: V*3>=1140+条件)
 //   Step 3: calc_skills() → 技能分布
-//   Step 4: 技能标志检查 → 护盾(21)/隐匿(24)>70 + flag3>=60 + sum/sum2阈值
+// Step 4: 技能标志检查 → 潜行(21)/幻术(24) freq>70 + flag3>=60 + sum/sum2阈值
 //   Step 5: 构建 xp_x[44] → 属性+技能频次特征向量
-//   Step 6: 暗影二段评分 → 若有"潜行"技能(32), 追加 "?shadow" 评分
+//   Step 6: 暗影二段评分 → 若有"幻术"(xp_x[32], skill ID 24), 追加 "?shadow" 评分
 //   Step 7: hanxu_Poly + MODEL/MODELQD 线性评分
 //
 // 返回值: ScoreResult, 其中 flag=true 表示通过所有检查
@@ -255,9 +265,9 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   name_obj.calc_skills(name);
 
   // ---- Step 4: 技能标志检查 ----
-  // flag3: 分身(23)+魅惑(11)+蓄力(16)+护身符(28) 的频次和
+  // flag3: 分身(23)+魅惑(11)+苏生术(16)+护身符(28) 的频次和
   //        flag3 >= 60 → 有特殊技能组合
-  // flag:  护盾(21)>70 或 隐匿(24)>70 → 有防御技能
+  // flag:  潜行(21)>70 或 幻术(24)>70 → 有防御技能
   int flag3 = 0;
   bool has_skill = false;
   for (int _ = 0; _ < 16; _++) {
@@ -311,7 +321,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   }
 
   // ---- Step 6: 暗影二段评分 (Shadow mechanic) ----
-  // 仅当 "潜行" 技能 (skill 32, 即 xp_x[32+8?]) 频次 > 0 时触发。
+  // 仅当 "幻术" (xp_x[32], 对应 skill ID 24) 频次 > 0 时触发。
   // 暗影名字 = 原名 + "?shadow" (8 字节后缀)。
   // 用 loading_name (独立 KSA) 重新评分，计算 shadow_bonus。
   // 公式: shadow_sum = HP/3 + Σ prop[0..6] - prop[6]*3
@@ -350,7 +360,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   }
   xp_x[43] = shadow_bonus;
 
-  // "治愈魔法" (skill 34, 即 xp_x[42]) 治疗加成: +20
+  // 隐匿 (skill ID 34, 即 xp_x[42]) 频次加成: +20
   if (xp_x[42] > 0) xp_x[42] += 20;
 
   // ---- Step 7: 多项式扩展 + 模型评分 ----

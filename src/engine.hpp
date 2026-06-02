@@ -10,10 +10,7 @@
 #include "common.hpp"
 #include "charset_data.hpp"
 #include "charset.hpp"
-#include "model_data.hpp"
-#include "utils.hpp"
-#include "name.hpp"
-#include "scoring.hpp"
+#include "scoring_1035.hpp"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -296,8 +293,8 @@ inline int engine_main(int argc,char**argv){
     DBG("all threads joined");
 
     // ===== 权威摘要 (问题4/5修复, 2026-06-01) =====
-    // 引擎是唯一真相源: max_sum/max_xp/max_xd 追踪所有名字(不止达标的),
-    // speed 是纯算力吞吐(不含 Python fork/字符集初始化/文件读取等 IPC 噪声)。
+    // 引擎是唯一真相源: max_sum/max_xp/max_xd 追踪通过 V 值/技能检查的名字
+    // (不止达标的——包含检查通过但未达输出阈值的名字), speed 是纯算力吞吐。
     // Python 直接采信此行, 不再从文件重算 max、不再用墙钟反算 speed。
     // 格式: SUMMARY max_sum=.. max_xp=.. max_xd=.. found=.. count=.. elapsed=.. speed=..
     //   count=已处理名字总数, speed=名字/秒 (纯计算)

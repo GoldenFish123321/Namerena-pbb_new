@@ -290,6 +290,38 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 > 服务端为每个 task 存固定 seed，重发时下发同一 seed，无论分给几核机器都产生相同名字集，可去重。
 
 
+## 高级功能
+
+### 模型切换
+
+项目支持两种评分模型，通过修改 `src/engine.hpp` 一行 `#include` 切换：
+
+| 文件 | 模型 | 特征维度 | 说明 |
+|------|------|---------|------|
+| `src/scoring_1035.hpp` | **XP/XD** (默认) | 44→1034 | 虚评/虚单，来自 pbb_all.cpp |
+| `src/scoring_1124.hpp` | **SQP/SQD** | 46→1124 | 强评/强单，兼容 Namerena-HtmlTools |
+
+**切换方式**：修改 `src/engine.hpp` 第 13 行，重新编译：
+
+```cpp
+#include "scoring_1035.hpp"  // XP/XD (默认)
+// #include "scoring_1124.hpp"  // SQP/SQD
+```
+
+SQP/SQD 与 XP/XD 的特征工程差异：
+- 技能频次使用**衰减叠加**（zd/kill 系数），而非原始频次
+- 护盾非线性变换、Shadow 加权公式、隐匿标志位等不同
+- 多项式展开 1124 维（含 4 对排除项），vs 1034 维
+- 均含 V 值过滤器（性能优化）
+
+100M 基准对比（6核 g++ AVX2）：
+
+| | XP/XD | SQP/SQD |
+|---|---|---|
+| Speed | 2.54M/s | 2.34M/s |
+| Found | 17 | 36 |
+| Max | XP=5615 XD=5933 | SQP=5586 SQD=5878 |
+
 ## 文件结构
 
 ```
@@ -307,11 +339,13 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 └── src/
     ├── common.hpp            # 类型 + SIMD 自动检测 (AVX512/AVX2/NEON)
     ├── charset_data.hpp      # 字符集原始数据 (希腊/俄文/拉丁/盲文/汉字)
-    ├── model_data.hpp        # 评分模型权重 (MODEL/MODELQD, 1035 floats)
+    ├── model_data.hpp        # 评分模型权重 (XP/XD, 1035 floats, 旧文件)
     ├── utils.hpp             # median/sort10 + 三路 SIMD (AVX512/AVX2/NEON)
     ├── charset.hpp           # 字符集加载 + Unicode 编码
     ├── name.hpp              # RC4 状态机 (KSA → PRGA → 技能分布)
-    ├── scoring.hpp           # 评分流水线 (V值→技能→hanxu_Poly预计算表→打分)
-    ├── engine.hpp            # 引擎主循环 (producer-consumer, stdin 传参)
+    ├── scoring.hpp           # 评分流水线 (旧文件, 已被 scoring_1035.hpp 替代)
+    ├── scoring_1035.hpp      # XP/XD 评分模型 (44→1034, 默认)
+    ├── scoring_1124.hpp      # SQP/SQD 评分模型 (46→1124)
+    ├── engine.hpp            # 引擎主循环 (改 include 切换模型)
     └── bridge.cpp            # pybind11 字符集数据绑定
 ```
