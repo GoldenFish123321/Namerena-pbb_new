@@ -169,12 +169,76 @@ inline int engine_main(int argc,char**argv){
 
     // ---- Consumer: 处理任务 (编码 + RC4 + 评分) ----
     // rng 改为 per-chunk 重建 (用 t.chunk_seed), 不再按线程 id 初始化、跨 chunk 连续使用。
-    // 这是问题3的核心修复: 随机性与线程数/调度顺序彻底解耦。
+    // 重构 (2026-06-02): 四种模式编码逻辑抽出为独立 helper — 消除分支交织与评分/blue 重复代码。
+    //   process_one()   — 评分 + blue 判定 (四种模式共享)
+    //   consume_seq()   — 顺序进位编码 (mode 1/2/4 共用)
+    //   consume_rand()  — 随机逐位编码 (mode 3 专用)
+    //   consume_mode1() — mode 1 进位检测 + 顺序编码
+    //   consume_mode24()— mode 2/4 随机前缀/LR + 顺序编码
+    //   consume_mode3() — mode 3 随机前缀 + 随机逐位编码
     auto cons=[&](int cid){(void)cid;Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
         // 编码宏: 全内联, 编译器在 scl==4 分支将 memcpy(...,4) 优化为单条 mov
         #define ENC(dst,ci) do{const char*_s=cb+(ci)*scl;if(scl==4)memcpy((dst),_s,4);else if(scl==1)*(dst)=*_s;else if(scl==2)memcpy((dst),_s,2);else if(scl==3)memcpy((dst),_s,3);else memcpy((dst),_s,scl);}while(0)
+
+        // ---- 公共 helper: 评分 + blue 判定 (四种模式共享, 消除重复) ----
+        auto process_one=[&](const char* buf,int nlen,const ScoreResult& r){
+            if(!r.flag)return;
+            int emin=xpm;if(r.flag3>=50)emin-=300;
+            if(r.sum>local_max_sum)local_max_sum=r.sum;
+            if(r.xp>local_max_xp)local_max_xp=r.xp;
+            if(r.xd>local_max_xd)local_max_xd=r.xd;
+            if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
+                if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
+                else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
+            if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
+                if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
+                else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
+                if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
+        };
+
+        // ---- 编码 helper: 顺序进位 (mode 1/2/4 共用) ----
+        auto consume_seq=[&](char* buf,int nlen,Name& name,int epre,int evar,uint64_t L,uint64_t R){
+            for(uint64_t i=L;i<R;i++){uint64_t now=i;
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf+pos,ci);now/=clen;}
+                process_one(buf,nlen,score_full(buf,nlen,name));}
+        };
+
+        // ---- 编码 helper: 随机逐位 (mode 3 专用) ----
+        auto consume_rand=[&](char* buf,int nlen,Name& name,int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            for(uint64_t i=L;i<R;i++){
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
+                process_one(buf,nlen,score_full(buf,nlen,name));}
+        };
+
+        // ---- mode 1: 顺序区间, 前缀/后缀全组合, 进位检测跳过共同前缀 ----
+        auto consume_mode1=[&](char* buf,int nlen,Name& name,int plen,int vlen,uint64_t L,uint64_t R){
+            name.PRELEN=plen;name.load_prefix(buf,nlen);
+            uint8_t dl[16],dr[16];uint64_t now;
+            now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
+            now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
+            int up=0;while(up<vlen&&dl[up]==dr[up])up++;
+            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf+plen+d*scl,ci);now/=clen;}
+            int epre=plen+up*scl,evar=vlen-up;
+            consume_seq(buf,nlen,name,epre,evar,L,R);
+        };
+
+        // ---- mode 2/4: 随机额外字符 + 随机区间 + 顺序进位 ----
+        auto consume_mode24=[&](char* buf,int nlen,Name& name,int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
+            int epre=plen+extra*scl,evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
+            L=rng()%random_range_max;R=L+CHUNK_SIZE;
+            consume_seq(buf,nlen,name,epre,evar,L,R);
+        };
+
+        // ---- mode 3: 随机额外字符 + 随机逐位编码 ----
+        auto consume_mode3=[&](char* buf,int nlen,Name& name,int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
+            int epre=plen+extra*scl,evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
+            consume_rand(buf,nlen,name,epre,evar,L,R,rng);
+        };
+
         while(q_get(q,t)){
             // 每个 chunk 用自己的确定性种子重建 rng (与执行环境无关)
             std::mt19937_64 rng(t.chunk_seed);
@@ -183,55 +247,13 @@ inline int engine_main(int argc,char**argv){
             int plen=(int)p.size(),slen=(int)s.size(),nlen=plen+vlen*scl+slen;
             char buf[512];memcpy(buf,p.data(),plen);memset(buf+plen,0,vlen*scl);
             if(slen)memcpy(buf+plen+vlen*scl,s.data(),slen);
-            uint64_t L=t.L,R=t.R;int evar=vlen,epre=plen;
-            if(mode>=2){
-                int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
-                epre+=extra*scl;evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
-                if(mode==2||mode==4){L=rng()%random_range_max;R=L+CHUNK_SIZE;}
-            }else{
-                name.PRELEN=plen;name.load_prefix(buf,nlen);uint8_t dl[16],dr[16];uint64_t now;
-                now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
-                now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
-                int up=0;while(up<vlen&&dl[up]==dr[up])up++;
-                now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf+epre+d*scl,ci);now/=clen;}
-                epre+=up*scl;evar-=up;
-            }
-            // 热路径: 编码 → score_full
-            if(mode==3){
-                for(uint64_t i=L;i<R;i++){
-                    for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
-                    ScoreResult r=score_full(buf,nlen,name);
-                    if(!r.flag)continue;
-                    int emin=xpm;if(r.flag3>=50)emin-=300;
-                    // 追踪本 task 的局部最大值 (所有结果, 不是只达标)
-                    if(r.sum>local_max_sum)local_max_sum=r.sum;
-                    if(r.xp>local_max_xp)local_max_xp=r.xp;
-                    if(r.xd>local_max_xd)local_max_xd=r.xd;
-                    if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
-                        if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
-                        else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
-                    if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
-                        if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
-                        else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
-                        if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
-                }
-            }else{
-                for(uint64_t i=L;i<R;i++){uint64_t now=i;for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf+pos,ci);now/=clen;}
-                    ScoreResult r=score_full(buf,nlen,name);
-                    if(!r.flag)continue;
-                    int emin=xpm;if(r.flag3>=50)emin-=300;
-                    if(r.sum>local_max_sum)local_max_sum=r.sum;
-                    if(r.xp>local_max_xp)local_max_xp=r.xp;
-                    if(r.xd>local_max_xd)local_max_xd=r.xd;
-                    if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
-                        if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
-                        else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
-                    if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
-                        if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
-                        else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
-                        if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
-                }
-            }
+            uint64_t L=t.L,R=t.R;
+
+            // 模式分发: 各模式独立的编码逻辑
+            if(mode==1)      consume_mode1(buf,nlen,name,plen,vlen,L,R);
+            else if(mode==3) consume_mode3(buf,nlen,name,plen,L,R,rng);
+            else             consume_mode24(buf,nlen,name,plen,L,R,rng);  // mode 2/4
+
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====
             {
                 std::lock_guard lk(out_mtx);
