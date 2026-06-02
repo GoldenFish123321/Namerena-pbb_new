@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++ python3-venv
+
+      - name: Build & smoke test
+        run: |
+          ./run.sh -y -c test-ci.config 2>&1
+
+      - name: Diff against expected output
+        run: |
+          diff <(sort out/ci-result) test-ci-expect-result.txt
