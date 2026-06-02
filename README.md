@@ -18,6 +18,7 @@ cp config.example.yaml config.yaml
 run.bat -c config.yaml           # Windows (自动检测 icpx/g++/cl, Zen5 自动启用 MSYS2 GCC)
 run.bat -y -c config.yaml        # Windows 跳过确认
 ```
+（也可以不写-c参数，默认使用config.json/yaml/toml）
 
 首次运行自动：检测系统包管理器 → 编译 C++ 引擎 → 启动。所有系统级安装前会确认（`-y` 跳过）。
 
@@ -301,11 +302,16 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 | `src/scoring_1035.hpp` | **XP/XD** (默认) | 44→1034 | 虚评/虚单，来自 pbb_all.cpp |
 | `src/scoring_1124.hpp` | **SQP/SQD** | 46→1124 | 对强评/强单更好的拟合，移植自 Namerena-HtmlTools |
 
-**切换方式**：修改 `src/engine.hpp` 第 13 行，重新编译：
+**切换方式**：修改 `src/engine.hpp` 第 13 行
 
 ```cpp
 #include "scoring_1035.hpp"  // XP/XD (默认)
 // #include "scoring_1124.hpp"  // SQP/SQD
+```
+重新编译并运行：
+```bash
+./run.sh --rebuild
+./run.bat --rebuild
 ```
 
 SQP/SQD 与 XP/XD 的特征工程差异：
