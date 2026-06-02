@@ -290,6 +290,7 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 ├── build.py                  # 编译器检测 + SIMD 探测 + 统一编译
 ├── engine.py                 # 引擎执行: 构建字符集 → Popen → 解析结果
 ├── main.py                   # 编排层: CLI 解析 + 配置加载
+├── config_schema.py          # config→engine 键名映射唯一真相源 (FieldDef + CONFIG_MAP)
 ├── engine_main.cpp           # C++ 引擎入口
 ├── build/                    # 编译产物 (pbb_engine, pbb_core.{so,pyd})
 ├── out/                      # 运行输出 (result_*.txt, blue.txt)
