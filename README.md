@@ -167,8 +167,11 @@ python3 main.py -c config.yaml \
 | Linux x86_64 | icpx → g++ | icpx → g++ | AVX-512 > AVX2 |
 | Linux ARM / Termux | g++ | g++ | NEON (128bit) |
 | Windows x86_64 | icpx → g++ → MSVC | icpx → MSVC | AVX2 (icpx 固定) |
+| Windows AMD Zen5 | MSYS2 GCC (→ icpx → MSVC) | 同 engine | AVX2 + `-march=znver5` |
 
 > Windows icpx 固定 `-xCORE-AVX2`。`-xHost` 在 Arrow Lake 上仍导致 LLVM 编译期 crash（2026-06-01 确认）。pbb_core 排除 g++（MinGW ABI 不兼容 Python）。
+>
+> AMD Zen5 用户：`run.bat` 自动检测 `C:\msys64\ucrt64\bin\g++.exe`，检测到后提升 MSYS2 GCC 为最优编译器，`build.py` 自动加 `-march=znver5`。
 
 编译输出（正常模式简洁，`--debug` 显示完整命令）：
 
