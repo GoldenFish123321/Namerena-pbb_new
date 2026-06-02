@@ -299,7 +299,7 @@ run(config, engine_bin=None, out_dir=None, result_file="result.txt")
 | 文件 | 模型 | 特征维度 | 说明 |
 |------|------|---------|------|
 | `src/scoring_1035.hpp` | **XP/XD** (默认) | 44→1034 | 虚评/虚单，来自 pbb_all.cpp |
-| `src/scoring_1124.hpp` | **SQP/SQD** | 46→1124 | 强评/强单，兼容 Namerena-HtmlTools |
+| `src/scoring_1124.hpp` | **SQP/SQD** | 46→1124 | 对强评/强单更好的拟合，移植自 Namerena-HtmlTools |
 
 **切换方式**：修改 `src/engine.hpp` 第 13 行，重新编译：
 
