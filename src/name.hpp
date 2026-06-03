@@ -9,7 +9,7 @@
 //     2. load_prefix()   → 部分 KSA 预处理共享前缀 (性能优化)
 //     3. load_name()     → 完整 KSA + SIMD 属性评分 → 计算 V 值
 //     4. calc_skills()   → RC4 PRGA 生成技能分布
-//     5. score_full()    → (在 scoring.hpp) 封装 3+4 + 模型评分
+//     5. score_full()    → (在 scoring_1035.hpp) 封装 3+4 + 模型评分
 //
 //   V 值 (八围评分) 计算:
 //     V = Σ 7 个属性的中位数 + HP/3 加成

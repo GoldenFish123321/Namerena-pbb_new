@@ -253,7 +253,7 @@ engine.py (Python)             src/ 核心 (header-only)
 字符集构建 (pbb_core)          common.hpp  类型 + SIMD 检测
 stdin 管道传参                 utils.hpp   AVX512/AVX2/NEON
 Popen → stderr 逐行读取        name.hpp    RC4 状态机
-结果统计                       scoring.hpp 评分流水线
+结果统计                       scoring_1035.hpp 评分流水线
 
 main.py (Python)               engine.hpp  引擎主循环
 ─────────────────
@@ -345,7 +345,6 @@ SQP/SQD 与 XP/XD 的特征工程差异：
 └── src/
     ├── common.hpp            # 类型 + SIMD 自动检测 (AVX512/AVX2/NEON)
     ├── charset_data.hpp      # 字符集原始数据 (希腊/俄文/拉丁/盲文/汉字)
-    ├── model_data.hpp        # 评分模型权重 (XP/XD, 1035 floats, 旧文件)
     ├── utils.hpp             # median/sort10 + 三路 SIMD (AVX512/AVX2/NEON)
     ├── charset.hpp           # 字符集加载 + Unicode 编码
     ├── name.hpp              # RC4 状态机 (KSA → PRGA → 技能分布)
