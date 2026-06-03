@@ -246,7 +246,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         if _use_temp:
             _tmp.cleanup()
 
-    # 问题4/5: 优先采信引擎权威摘要 (max 含所有名字、speed 为纯算力吞吐)。
+    # 问题4/5: 优先采信引擎权威摘要 (max 含通过 V 值/技能检查的名字、speed 为纯算力吞吐)。
     # 文件重算的 max 仅是达标名字的 max (语义不同), 墙钟反算的 speed 含 IPC 噪声。
     # 摘要缺失时 (旧引擎/异常) 回退到文件重算 + 墙钟反算, 保证健壮性。
     if summary is not None:
