@@ -197,7 +197,8 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         t0 = time.time()
         proc = subprocess.Popen(
             [engine_bin], stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace")
         proc.stdin.write(params)
         proc.stdin.close()
 
@@ -226,7 +227,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         mxp, mxd = 0, 0
         result_path = os.path.join(result_dir, result_file)
         if os.path.exists(result_path):
-            with open(result_path, encoding="utf-8") as f:
+            with open(result_path, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.strip()
                     if not line: continue
