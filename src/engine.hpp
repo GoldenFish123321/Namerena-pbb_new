@@ -244,6 +244,7 @@ inline int engine_main(int argc,char**argv){
             int plen=(int)p.size(),slen=(int)s.size(),nlen=plen+vlen*scl+slen;
             char buf[512];memcpy(buf,p.data(),plen);memset(buf+plen,0,vlen*scl);
             if(slen)memcpy(buf+plen+vlen*scl,s.data(),slen);
+            buf[nlen]=0;  // 修复: load_prefix/load_name 循环第一轮读 name[nlen], 与 pbb_all.cpp 全局零初始化对齐
             uint64_t L=t.L,R=t.R;
 
             // 模式分发: 各模式独立的编码逻辑
