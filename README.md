@@ -31,7 +31,9 @@ debug_mode: 0                   # 0=关闭 1=开启 (--debug 启用)
 team_name: "test"
 prefixes:
   - name: "test-"               # '+' = 无前缀
-suffixes:
+  - name: "pbb-"
+  - name: "abc-"                # 多前缀: mode 1 每个都跑全程
+suffixes:                       #         mode 2/4 每个 chunk 随机选一个
   - name: "+"
 
 character_set:
@@ -40,8 +42,8 @@ character_set:
   custom_values: "🐒🐵🐊🦎🐍🐛🙈🙉🙊🐉"  # 字符串 (也兼容旧格式数字列表)
 
 enumeration:
-  mode: 1                       # 1=顺序 2=随机(区间) 3=随机(逐位) 4=随机(配对)
-  variable_length: 8             # 可变字符数
+  mode: 2                       # 1=顺序 2=随机(区间) 3=随机(逐位)⚠️ 4=随机(配对)
+  variable_length: 8            # 可变字符数
   ranges:
     - start: 0                  # 起始编号
       end: 100000000            # 结束编号 (不含), -1=几乎无限
