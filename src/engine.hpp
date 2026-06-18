@@ -188,11 +188,12 @@ inline int engine_main(int argc,char**argv){
             if(r.xd>local_max_xd)local_max_xd=r.xd;
             if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
                 if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
-                else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());}
+                else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());
+                fflush(fp);}
             if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
                 if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
                 else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
-                if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());}}
+                if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
         // ---- 编码 helper: 顺序进位 (mode 1/2/4 共用) ----
