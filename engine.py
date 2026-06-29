@@ -70,6 +70,13 @@ def _build_charset(cs: dict) -> str:
                     for cp in range(r["start"], r["end"] + 1):
                         buf.extend(pbb_core.encode_unicode(cp))
 
+        else:  # scl >= 5 (5+字节)
+            if t == 1:   buf.extend(_custom_bytes(cs.get("custom_values", [])))
+            elif t == 2:
+                for r in cs.get("unicode_ranges", []):
+                    for cp in range(r["start"], r["end"] + 1):
+                        buf.extend(pbb_core.encode_unicode(cp))
+
     return bytes(buf).hex()
 
 

@@ -101,14 +101,14 @@ def _validate_config(cfg: dict):
     # ── character_set ──
     cs = cfg.get("character_set", {})
     scl = cs.get("single_char_length")
-    if scl not in (1, 2, 3, 4):
-        _die(f"character_set.single_char_length 必须为 1/2/3/4, 当前: {scl}")
+    if not isinstance(scl, int) or scl < 1:
+        _die(f"character_set.single_char_length 必须为正整数, 当前: {scl}")
 
     types = cs.get("types", [])
     if not isinstance(types, list) or not types:
         _die("character_set.types 至少需要一个类型")
     scl_type_max = {1: 5, 2: 8, 3: 8, 4: 3}
-    tmax = scl_type_max[scl]
+    tmax = scl_type_max.get(scl, 2)  # scl >= 5: 1=自定义 2=Unicode区间
     for t in types:
         if not isinstance(t, int) or t < 1 or t > tmax:
             _die(f"character_set.types: scl={scl} 时 type 必须为 1~{tmax}, 当前: {t}")
