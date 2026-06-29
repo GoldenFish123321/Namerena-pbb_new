@@ -30,6 +30,9 @@ tmp_*
 *.tmp
 
 #config
-config.json
-config.yaml
-config.toml
+*.json
+*.yaml
+*.toml
+!config.example.json
+!config.example.yaml
+!config.example.toml
