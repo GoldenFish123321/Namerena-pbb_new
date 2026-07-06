@@ -140,7 +140,13 @@ inline int engine_main(int argc,char**argv){
     if(mode>=2){varlen_task=0;uint64_t x=1;while(x<CHUNK_SIZE){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
 
     // 预分配 mex_vis (预计 task 数, 留 20% 余量)
-    int est_tasks=(int)((rR-rL+CHUNK_SIZE-1)/CHUNK_SIZE*np*1.2)+10;
+    // mode 1: 每个 prefix 跑完整区间 → 总 task = range_chunks × np
+    // mode 2/3/4: producer 只按 interval 切 chunk → 总 task = range_chunks (不乘 np)
+    uint64_t range_chunks = (rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    uint64_t est_tasks_u = (mode == 1 ? range_chunks * (uint64_t)np : range_chunks);
+    // 安全上限: 10M 条已覆盖任何实际运行场景, 防止超大 range 或 uint64 溢出 (mex_vis 支持动态扩容)
+    if (est_tasks_u > 10000000ULL) est_tasks_u = 10000000ULL;
+    int est_tasks = (int)(est_tasks_u * 1.2) + 10;
     mex_vis.resize(est_tasks,false);
 
     // ---- task_id 序号生成器 ----
