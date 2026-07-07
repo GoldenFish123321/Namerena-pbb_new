@@ -22,6 +22,12 @@ run.bat -y -c config.yaml        # Windows 跳过确认
 
 首次运行自动：检测系统包管理器 → 编译 C++ 引擎 → 启动。所有系统级安装前会确认（`-y` 跳过）。
 
+## 预编译发布包
+
+如果目标用户不方便安装 Python 或 C++ 编译器，可以制作 Windows 预编译发布包。发布包内置 Python runtime、`pbb_core*.pyd` 和 `pbb_engine.exe`，用户解压后直接运行即可。
+
+发布包构建说明见 [`docs/RELEASE_WINDOWS.md`](docs/RELEASE_WINDOWS.md)。生成物 `release/`、`release_build/`、`*.spec`、`*.zip` 已加入 `.gitignore`，不要提交到仓库。
+
 ## 配置
 
 支持 **JSON / YAML / TOML** 三种格式，扩展名自动识别。不指定 `-c` 时依次尝试 `config.json → config.yaml → config.toml`。

@@ -10,6 +10,11 @@ import os, sys, time, tempfile, subprocess
 from config_schema import engine_default, ALL_ENGINE_KEYS
 
 
+def _runtime_base_dir() -> str:
+    """Return the source dir in dev, or PyInstaller's extraction dir in release."""
+    return getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+
+
 def _custom_bytes(values):
     """解析 custom_values: 字符串 -> UTF-8 编码, 数字列表 -> 字节数组."""
     if isinstance(values, str):
@@ -167,7 +172,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
     else:
         # pbb_core 在 build/ 目录
         import sys as _sys
-        _build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build")
+        _build_dir = os.path.join(_runtime_base_dir(), "build")
         if _build_dir not in _sys.path:
             _sys.path.insert(0, _build_dir)
         import pbb_core
@@ -184,7 +189,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
 
     # 引擎路径
     if engine_bin is None:
-        base = os.path.dirname(os.path.abspath(__file__))
+        base = _runtime_base_dir()
         engine_bin = os.path.join(base, "build", "pbb_engine")
         if sys.platform == "win32":
             engine_bin += ".exe"
