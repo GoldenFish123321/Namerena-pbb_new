@@ -166,11 +166,11 @@ inline int engine_main(int argc,char**argv){
     // 不再共享 rng_global, 确保与执行顺序/线程数无关。
     auto prod=[&]{
         if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;){
-            uint64_t span=std::min(CHUNK_SIZE,rR-i),tr=i+span;
+            uint64_t span=std::min<uint64_t>(CHUNK_SIZE,rR-i),tr=i+span;
             TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
             t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);i=tr;}
         else for(uint64_t i=rL;i<rR;){
-            uint64_t span=std::min(CHUNK_SIZE,rR-i),tr=i+span;
+            uint64_t span=std::min<uint64_t>(CHUNK_SIZE,rR-i),tr=i+span;
             TaskData t;t.L=i;t.R=tr;t.type=mode;
             t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
             std::mt19937_64 prng(t.chunk_seed);
