@@ -5,7 +5,7 @@ run(config, engine_bin, out_dir) → {results, max_xp, max_xd, speed}
 
 config 字典使用 engine 键名 (与 engine.hpp kv[...] 及 config_schema.CONFIG_MAP 一致)。
 """
-import os, sys, time, tempfile, subprocess
+import os, sys, time, tempfile, subprocess, signal
 
 from config_schema import engine_default, ALL_ENGINE_KEYS
 
@@ -204,6 +204,22 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
     os.makedirs(result_dir, exist_ok=True)
     cwd = os.getcwd()
 
+    _interrupted = False
+    _proc = None
+
+    def _on_sigint(sig, frame):
+        nonlocal _interrupted
+        if _interrupted:
+            # 第二次 Ctrl+C: 强制退出
+            os._exit(130)
+        _interrupted = True
+        print("", file=sys.stderr, flush=True)
+        print("[engine] Interrupted — stopping engine...", file=sys.stderr, flush=True)
+        if _proc and _proc.poll() is None:
+            _proc.terminate()
+
+    old_handler = signal.signal(signal.SIGINT, _on_sigint)
+
     try:
         os.chdir(out_dir)
         t0 = time.time()
@@ -211,6 +227,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
             [engine_bin], stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             encoding="utf-8", errors="replace")
+        _proc = proc
         proc.stdin.write(params)
         proc.stdin.close()
 
@@ -231,7 +248,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         proc.wait()
         elapsed = time.time() - t0
 
-        if proc.returncode != 0:
+        if not _interrupted and proc.returncode != 0:
             raise RuntimeError(f"Engine failed ({proc.returncode})")
 
         # 读取结果 (名字列表仍从文件读; max/speed 优先采信引擎摘要)
@@ -255,6 +272,7 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
                     else:
                         results.append({"name": line, "xp": 0, "xd": 0})
     finally:
+        signal.signal(signal.SIGINT, old_handler)
         os.chdir(cwd)
         if _use_temp:
             _tmp.cleanup()

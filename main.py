@@ -358,7 +358,11 @@ def main():
         print(f"[main] Threads: {n}, Mode: {task_config['mode']}, Output: out/{result_file}", file=sys.stderr)
 
     t0 = time.time()
-    result = run_engine(task_config, engine_bin, out_dir=out_dir, result_file=result_file)
+    try:
+        result = run_engine(task_config, engine_bin, out_dir=out_dir, result_file=result_file)
+    except KeyboardInterrupt:
+        print("\n[main] Interrupted", file=sys.stderr)
+        sys.exit(130)
     elapsed = time.time() - t0
 
     # ── 6. 输出 ──
