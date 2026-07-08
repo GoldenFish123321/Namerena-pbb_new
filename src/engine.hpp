@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <cstdlib>
+#include <limits>
 
 #define MAX_QUEUE_LEN 4        // 任务队列容量
 // ---- 两层并行术语 (第一性原理: f(i) 无依赖, 切 i 空间) ----
@@ -44,13 +45,31 @@ static inline uint64_t splitmix64(uint64_t x){
     x=(x^(x>>27))*0x94D049BB133111EBULL;
     return x^(x>>31);
 }
-static inline uint64_t derive_chunk_seed(uint64_t g_seed,int task_id){
-    return splitmix64(g_seed ^ splitmix64((uint64_t)task_id));
+static inline uint64_t derive_chunk_seed(uint64_t g_seed,uint64_t task_id){
+    return splitmix64(g_seed ^ splitmix64(task_id));
+}
+
+static inline uint64_t ceil_div_u64(uint64_t n,uint64_t d){
+    return n/d + (n%d!=0);
+}
+
+static inline uint64_t saturating_mul_u64(uint64_t a,uint64_t b){
+    const uint64_t umax=std::numeric_limits<uint64_t>::max();
+    if(a!=0&&b>umax/a)return umax;
+    return a*b;
+}
+
+static inline uint64_t round_up_to_chunk_u64(uint64_t n){
+    return saturating_mul_u64(ceil_div_u64(n,CHUNK_SIZE),CHUNK_SIZE);
+}
+
+static inline uint64_t chunk_end_u64(uint64_t begin,uint64_t end){
+    return end-begin>CHUNK_SIZE?begin+CHUNK_SIZE:end;
 }
 
 // ---- 任务数据结构 ----
 // chunk_seed: 该 chunk 的确定性随机种子 (producer 创建时派生, 与线程无关)
-struct TaskData{uint64_t L,R;int prefix_id,suffix_id,type,task_id;uint64_t chunk_seed;};
+struct TaskData{uint64_t L,R;int prefix_id,suffix_id,type;uint64_t task_id,chunk_seed;};
 struct TaskQueue{TaskData d[MAX_QUEUE_LEN];int h=0,t=0;bool closed=false;std::mutex mtx;std::condition_variable cv_add,cv_get;};
 
 // 环形队列操作 (生产者-消费者)
@@ -108,17 +127,19 @@ inline int engine_main(int argc,char**argv){
 
     // 初始化 Name 状态机 (队伍名 KSA)
     Name name_init;name_init.load_team(team.c_str());
-    TaskQueue q;std::mutex out_mtx;std::atomic<int>tasks_done{0},total_found{0};
+    TaskQueue q;std::mutex out_mtx;std::atomic<uint64_t>tasks_done{0};std::atomic<int>total_found{0};
     int max_sum=0,max_xp=0,max_xd=0;       // 全局最大值 (out_mtx 保护)
-    int mex_cur=0;                          // 最小未完成 task_id
+    uint64_t mex_cur=0;                     // 最小未完成 task_id
     std::vector<bool> mex_vis;              // task_id 完成标记
-    unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
+    uint64_t range_len=rR-rL;
+    uint64_t range_chunks=ceil_div_u64(range_len,CHUNK_SIZE);
+    unsigned long long ALL_totnum=saturating_mul_u64(range_len,(uint64_t)np);  // 总名字数 (对齐原版, 用于 time left)
     // mode 2/3/4: 随机模式不按 prefix 翻倍, 总名数 = range 长度
-    if(mode>=2) ALL_totnum = rR - rL;
+    if(mode>=2) ALL_totnum = range_len;
     // mode 2/4: consumer 中 R=L+CHUNK_SIZE 覆盖了 producer 区间,
     // 每个 chunk 固定处理 CHUNK_SIZE 个名字, 最后一块可能超出理论 range,
     // 因此 ALL_totnum 需向上取整到 CHUNK_SIZE 边界 (否则 SUMMARY speed 和进度条 time-left 偏小)
-    if(mode==2||mode==4) ALL_totnum = ((rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
+    if(mode==2||mode==4) ALL_totnum = round_up_to_chunk_u64(range_len);
     auto t_start=std::chrono::steady_clock::now();
     // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
@@ -142,31 +163,34 @@ inline int engine_main(int argc,char**argv){
     // 预分配 mex_vis (预计 task 数, 留 20% 余量)
     // mode 1: 每个 prefix 跑完整区间 → 总 task = range_chunks × np
     // mode 2/3/4: producer 只按 interval 切 chunk → 总 task = range_chunks (不乘 np)
-    uint64_t range_chunks = (rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    uint64_t est_tasks_u = (mode == 1 ? range_chunks * (uint64_t)np : range_chunks);
+    uint64_t est_tasks_u = (mode == 1 ? saturating_mul_u64(range_chunks,(uint64_t)np) : range_chunks);
     // 安全上限: 10M 条已覆盖任何实际运行场景, 防止超大 range 或 uint64 溢出 (mex_vis 支持动态扩容)
     if (est_tasks_u > 10000000ULL) est_tasks_u = 10000000ULL;
     int est_tasks = (int)(est_tasks_u * 1.2) + 10;
     mex_vis.resize(est_tasks,false);
 
     // ---- task_id 序号生成器 ----
-    int task_id_counter=0;
+    uint64_t task_id_counter=0;
 
     // ---- Producer: 生成任务 ----
     // 每个 chunk 的随机决策 (prefix/suffix 选择) 由其 chunk_seed 派生,
     // 不再共享 rng_global, 确保与执行顺序/线程数无关。
     auto prod=[&]{
-        if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
-            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
+        if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;){
+            uint64_t tr=chunk_end_u64(i,rR);
             TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
-            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);}
-        else for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
-            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
+            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);
+            if(rR-i<=CHUNK_SIZE)break;
+            i+=CHUNK_SIZE;}
+        else for(uint64_t i=rL;i<rR;){
+            uint64_t tr=chunk_end_u64(i,rR);
             TaskData t;t.L=i;t.R=tr;t.type=mode;
             t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
             std::mt19937_64 prng(t.chunk_seed);
             t.prefix_id=prng()%np+1;t.suffix_id=mode==4?t.prefix_id:prng()%ns+1;
-            q_add(q,t);}
+            q_add(q,t);
+            if(rR-i<=CHUNK_SIZE)break;
+            i+=CHUNK_SIZE;}
         q_close(q);
     };
 
@@ -267,24 +291,31 @@ inline int engine_main(int argc,char**argv){
                 if(local_max_xp>max_xp)max_xp=local_max_xp;
                 if(local_max_xd>max_xd)max_xd=local_max_xd;
                 // mex 追踪 (原版 mex_vis + mex_cur)
-                if(t.task_id>=(int)mex_vis.size())mex_vis.resize(t.task_id+256,false);
-                mex_vis[t.task_id]=true;
-                while(mex_cur<(int)mex_vis.size()&&mex_vis[mex_cur])mex_cur++;
+                if(t.task_id>=(uint64_t)mex_vis.size()){
+                    uint64_t next_size=t.task_id+256;
+                    if(next_size<t.task_id)next_size=std::numeric_limits<uint64_t>::max();
+                    uint64_t max_size=(uint64_t)mex_vis.max_size();
+                    if(next_size>max_size)next_size=max_size;
+                    mex_vis.resize((size_t)next_size,false);
+                }
+                mex_vis[(size_t)t.task_id]=true;
+                while(mex_cur<(uint64_t)mex_vis.size()&&mex_vis[(size_t)mex_cur])mex_cur++;
                 // 进度显示: 每 100 task (对齐原版)
-                int td=++tasks_done;
+                uint64_t td=++tasks_done;
                 if(td%100==0){
                     auto now=std::chrono::steady_clock::now();
                     double sec=std::chrono::duration<double>(now-t_start).count();
-                    long long done_num=1ll*td*CHUNK_SIZE;
-                    long long tmlft=ALL_totnum>done_num?((ALL_totnum-done_num)*1.0/done_num)*sec:0;
+                    uint64_t done_num=saturating_mul_u64(td,CHUNK_SIZE);
+                    long double tmlft_d=(ALL_totnum>done_num&&done_num>0)?((long double)(ALL_totnum-done_num)/(long double)done_num)*(long double)sec:0.0L;
+                    uint64_t tmlft=tmlft_d>(long double)std::numeric_limits<uint64_t>::max()?std::numeric_limits<uint64_t>::max():(uint64_t)tmlft_d;
                     // 原版第一行: taskX finished, task_mex=Y, count:Z.ZZZT
-                    fprintf(flog,"task%d finished,task_mex=%d,count:%.6lfT\n",
-                        t.task_id,mex_cur,done_num/1e12);
+                    fprintf(flog,"task%llu finished,task_mex=%llu,count:%.6lfT\n",
+                        (unsigned long long)t.task_id,(unsigned long long)mex_cur,(double)done_num/1e12);
                     // 原版第二行: tot=N, (八围,XP,XD), time: Xs, speed: XT/d, time left:XhXmXs
-                    fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lldh%lldm%llds\n",
+                    fprintf(fspeed,"tot=%d, (%d,%d,%d),time: %.2fs, speed: %.6fT/d,time left:%lluh%llum%llus\n",
                         total_found.load(),max_sum,max_xp,max_xd,sec,
-                        td/sec*86400*CHUNK_SIZE/1e12,
-                        tmlft/3600,(tmlft%3600)/60,tmlft%60);
+                        (double)td/sec*86400.0*(double)CHUNK_SIZE/1e12,
+                        (unsigned long long)(tmlft/3600),(unsigned long long)((tmlft%3600)/60),(unsigned long long)(tmlft%60));
                     fflush(output_log?stderr:flog);
                     fflush(output_speed?stderr:fspeed);
                 }
