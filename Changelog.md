@@ -1,4 +1,14 @@
-﻿# Changelog
+# Changelog
+
+## 0.1.2
+
+- 支持 `enumeration.prefix_ranges`，可按前缀顺序为不同前缀分配独立搜索区间。
+- 支持运行时通过 `out/.threads` 动态调整 worker 线程数，并修复降档线程在队列关闭后无法退出导致进程卡住的问题。
+- 新增 `convert_old.py`，用于将旧版输入格式转换为新版 YAML 配置。
+- `prefix_ranges.end = -1` 统一表示接近 `uint64_t` 上限的无限区间，不再表示跳过此前缀。
+- 新增 `PBB_CXXFLAGS` 编译参数覆盖能力，并改进 Windows MinGW Python 链接库生成。
+- 未合入旧格式样例输入和未调用的旧版 C++ 参考源码，避免仓库引入无用大文件。
+- 版本号更新为 `0.1.2`。
 
 ## 0.1.1
 

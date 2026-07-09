@@ -30,7 +30,7 @@
 
 - 包名格式：`pbb-最大型号范围-版本号.zip`。
 - `最大型号范围` 要尽可能大，但范围内所有 CPU 的最佳编译参数必须相同。
-- 包名使用小写 ASCII、连字符分隔，例如 `pbb-windows-x64-intel-raptorlake-avx2-0.1.1.zip`。
+- 包名使用小写 ASCII、连字符分隔，例如 `pbb-windows-x64-intel-raptorlake-avx2-0.1.2.zip`。
 - 包内 README 必须使用中文。
 - 包内 README 必须写明版本号、最佳适用范围、编译参数和详细用法。
 - 包内必须包含且只包含以下配置示例文件：
@@ -61,7 +61,7 @@ README 必须是中文，并至少包含以下内容：
 ```text
 PBB Windows 预编译包
 
-版本号：0.1.1
+版本号：0.1.2
 
 最佳适用范围：
   Windows 10/11 x64
@@ -183,14 +183,14 @@ Get-ChildItem release\<package> -Filter "config*.json","config*.toml","config*.y
 验证输出中必须看到版本号和 SIMD：
 
 ```text
-[main] Version: 0.1.1
+[main] Version: 0.1.2
 [engine] SIMD: AVX2
 ```
 
 或 AMD Zen4/Zen5 包：
 
 ```text
-[main] Version: 0.1.1
+[main] Version: 0.1.2
 [engine] SIMD: AVX-512
 ```
 

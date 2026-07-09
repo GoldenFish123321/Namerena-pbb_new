@@ -53,6 +53,15 @@ enumeration:
   ranges:
     - start: 0                  # 起始编号
       end: 100000000            # 结束编号 (不含), -1=几乎无限
+  # 可选: 按 prefixes 顺序为连续前缀段分配独立区间。
+  # count 总和必须等于 prefixes 数量；end: -1 永远表示几乎无限。
+  prefix_ranges:
+    - count: 1
+      start: 0
+      end: 100000000
+    - count: 2
+      start: 100000000
+      end: -1
 
 collection:
   xp_min: 4900                  # 虚评最低阈值
@@ -212,6 +221,27 @@ python3 main.py -c config.yaml \
 ```
 [engine] SIMD: AVX2
 ```
+
+## 动态线程数
+
+引擎启动时仍由 `threads.worker_threads` 或 `--threads` 决定最大 worker 数。运行中可以写入 `out/.threads` 临时降低或恢复实际工作线程数：
+
+```bash
+# 将当前运行中的 worker 数调整为 4
+printf "4" > out/.threads
+```
+
+取值范围是 `1..worker_threads`。被降档的 worker 会在 chunk 边界暂停；队列结束后会正常退出。
+
+## 旧格式转换
+
+旧版输入文件可以用 `convert_old.py` 转成新版 YAML：
+
+```bash
+python convert_old.py input_daily.txt -o config.yaml
+```
+
+转换器会保留前缀/后缀顺序，并把旧格式里的分段 range 转成 `enumeration.prefix_ranges`。旧格式中的 `-1` 同样表示几乎无限。
 
 ## 进度显示
 
