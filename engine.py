@@ -92,13 +92,11 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
     result_file: 引擎输出文件名 (相对 out/). 分布式多 task 并发时应传入唯一名,
                  避免同目录撞文件 (如 f"result_{task_id}.txt").
     """
-    # prefix/suffix CSV
+    # prefix/suffix CSV — 保留原始内容 (包括前后空格), "+"/"" 映射为空
     pfx = config.get("prefixes", "")
     sfx = config.get("suffixes", "")
-    if isinstance(pfx, list): pfx = ",".join(pfx)
-    if isinstance(sfx, list): sfx = ",".join(sfx)
-    pfx = ",".join("" if x.strip() == "+" else x.strip() for x in pfx.split(","))
-    sfx = ",".join("" if x.strip() == "+" else x.strip() for x in sfx.split(","))
+    if isinstance(pfx, list): pfx = ",".join("" if x == "+" or x == "" else x for x in pfx)
+    if isinstance(sfx, list): sfx = ",".join("" if x == "+" or x == "" else x for x in sfx)
     if not pfx: pfx = ""
     if not sfx: sfx = ""
 
@@ -131,6 +129,10 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
     # A1: seed 传递 (config 有 seed 才传; 缺失则引擎用时间熵, 单机行为不变)
     if config.get("seed") is not None:
         params += f"seed={config['seed']}\n"
+    # Per-prefix ranges (可选; 不存在时引擎回退到 range_L/R)
+    if config.get("prefix_range_L"):
+        params += f"prefix_range_L={config['prefix_range_L']}\n"
+        params += f"prefix_range_R={config['prefix_range_R']}\n"
     if config.get("collect_mode") == 2:
         params += (
             f"c_eight_v_min={config.get('c_eight_v_min', _dv('c_eight_v_min'))}\n"

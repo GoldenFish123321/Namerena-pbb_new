@@ -107,6 +107,9 @@ _ENGINE_KEYS_COMPUTED = {
     # range 映射 (由 Python 从 range_L/range_R 写)
     "range_L",
     "range_R",
+    # per-prefix ranges (CSV, 与 prefixes 顺序一一对应; 不存在时回退到 range_L/R)
+    "prefix_range_L",
+    "prefix_range_R",
     # 可选 seed
     "seed",
 }

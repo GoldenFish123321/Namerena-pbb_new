@@ -143,6 +143,34 @@ def _validate_config(cfg: dict):
         if not isinstance(end, int) or (end != -1 and end <= start):
             _die(f"enumeration.ranges[{i}].end 必须 > start (或 -1=无限), 当前: end={end} start={start}")
 
+    # ── enumeration.prefix_ranges (可选: 按连续段分配前缀区间) ──
+    pfx_count = len(cfg.get("prefixes", []))
+    pr_cfg = en.get("prefix_ranges")
+    if pr_cfg is not None:
+        if not isinstance(pr_cfg, list) or not pr_cfg:
+            _die("enumeration.prefix_ranges 必须为非空列表")
+        total_cnt = 0
+        for i, pr in enumerate(pr_cfg):
+            cnt = pr.get("count")
+            if not isinstance(cnt, int) or cnt < 1:
+                _die(f"enumeration.prefix_ranges[{i}].count 必须为正整数, 当前: {cnt}")
+            start = pr.get("start", 0)
+            end = pr.get("end", int(1e18))
+            if not isinstance(start, int) or start < 0:
+                _die(f"enumeration.prefix_ranges[{i}].start 必须 >= 0, 当前: {start}")
+            if not isinstance(end, int):
+                _die(f"enumeration.prefix_ranges[{i}].end 必须为整数, 当前: {end}")
+            # end == 0 且 start == 0: 跳过此前缀 (零区间)
+            if end == 0 and start == 0:
+                pass
+            elif end == -1:
+                pass  # 几乎无限 — engine 层会展开
+            elif end <= start:
+                _die(f"enumeration.prefix_ranges[{i}].end 必须 > start (或 0=跳过, -1=无限), 当前: end={end} start={start}")
+            total_cnt += cnt
+        if total_cnt != pfx_count:
+            _die(f"enumeration.prefix_ranges count 总和 ({total_cnt}) != prefixes 数量 ({pfx_count})")
+
     # ── collection (使用 _read_cfg 统一读取) ──
     xpm = _read_cfg(cfg, "collection.xp_min")
     if not isinstance(xpm, int) or xpm < 0 or xpm > 9999:
@@ -223,6 +251,32 @@ def _build_task_config(cfg: dict) -> dict:
     tc["scl"] = cfg["character_set"]["single_char_length"]
     tc["range_L"] = rng.get("start", 0)
     tc["range_R"] = rng.get("end", int(1e18))
+
+    # ── Per-prefix ranges (可选): 按枚举区间分配给各前缀 ──
+    pr_cfg = en.get("prefix_ranges")
+    if pr_cfg:
+        pfx_list = tc["prefixes"]
+        total_pfx = len(pfx_list)
+        range_L, range_R = [], []
+        idx = 0
+        for pr in pr_cfg:
+            cnt = pr["count"]
+            s = pr.get("start", 0)
+            e = pr.get("end", int(1e18))
+            if e == -1:
+                e = 0       # -1 表示跳过此前缀 (range [0,0] → 零 chunk)
+            for _ in range(cnt):
+                if idx >= total_pfx:
+                    break
+                range_L.append(str(s))
+                range_R.append(str(e))
+                idx += 1
+        # 校验已在 _validate_config 做过, 此处防御
+        if idx != total_pfx:
+            _die(f"prefix_ranges count 总和 ({idx}) != 前缀总数 ({total_pfx})")
+        tc["prefix_range_L"] = ",".join(range_L)
+        tc["prefix_range_R"] = ",".join(range_R)
+
     # result_file: 优先 CONFIG_MAP 默认 "result.txt"
     tc["result_file"] = tc.get("result_file", "result.txt")
 

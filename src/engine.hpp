@@ -96,6 +96,21 @@ inline int engine_main(int argc,char**argv){
     int output_log=kv.count("output_log")?std::stoi(kv["output_log"]):1;
     int output_speed=kv.count("output_speed")?std::stoi(kv["output_speed"]):1;
 
+    // Per-prefix ranges (可选: 给每个前缀分配独立的枚举区间)
+    // prefix_range_L / prefix_range_R 是 CSV 字符串, 与 prefixes 顺序一一对应
+    // 不存在时回退到全局 range_L / range_R
+    std::vector<uint64_t> prefix_L, prefix_R;
+    bool has_prefix_ranges = false;
+    if(kv.count("prefix_range_L") && kv.count("prefix_range_R")){
+        auto parts_L = split_csv(kv["prefix_range_L"]);
+        auto parts_R = split_csv(kv["prefix_range_R"]);
+        for(size_t i=0;i<parts_L.size()&&i<parts_R.size();i++){
+            prefix_L.push_back(std::stoull(parts_L[i]));
+            prefix_R.push_back(std::stoull(parts_R[i]));
+        }
+        has_prefix_ranges = !prefix_L.empty();
+    }
+
     // 打开输出文件
     std::string out_path="out/"+kv["result_file"];
     FILE*fp=fopen(out_path.c_str(),"a");if(!fp){fprintf(stderr,"[engine] ERROR: cannot open %s\n",out_path.c_str());return 1;}
@@ -112,14 +127,26 @@ inline int engine_main(int argc,char**argv){
     int max_sum=0,max_xp=0,max_xd=0;       // 全局最大值 (out_mtx 保护)
     int mex_cur=0;                          // 最小未完成 task_id
     std::vector<bool> mex_vis;              // task_id 完成标记
-    unsigned long long ALL_totnum=(rR-rL)*np;  // 总名字数 (对齐原版, 用于 time left)
-    // mode 2/3/4: 随机模式不按 prefix 翻倍, 总名数 = range 长度
-    if(mode>=2) ALL_totnum = rR - rL;
-    // mode 2/4: consumer 中 R=L+CHUNK_SIZE 覆盖了 producer 区间,
-    // 每个 chunk 固定处理 CHUNK_SIZE 个名字, 最后一块可能超出理论 range,
-    // 因此 ALL_totnum 需向上取整到 CHUNK_SIZE 边界 (否则 SUMMARY speed 和进度条 time-left 偏小)
-    if(mode==2||mode==4) ALL_totnum = ((rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
+    unsigned long long ALL_totnum;  // 总名字数 (用于 time left + SUMMARY speed)
+    if(has_prefix_ranges){
+        // 每个前缀有自己的区间, 分别求和
+        ALL_totnum = 0;
+        if(mode==1){
+            for(int j=0;j<np;j++) ALL_totnum += prefix_R[j] - prefix_L[j];
+        } else {
+            uint64_t total_chunks = 0;
+            for(int j=0;j<np;j++) total_chunks += (prefix_R[j] - prefix_L[j] + CHUNK_SIZE - 1) / CHUNK_SIZE;
+            ALL_totnum = total_chunks * CHUNK_SIZE;
+        }
+    } else {
+        ALL_totnum = (rR-rL)*np;
+        if(mode>=2) ALL_totnum = rR - rL;
+        if(mode==2||mode==4) ALL_totnum = ((rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
+    }
     auto t_start=std::chrono::steady_clock::now();
+    // cur_speed: 定期速度采样 (每 1000 task ≈ 1B 名字), 对齐原版 pbb_all.cpp
+    auto t_cur_last = t_start;
+    int td_cur_last = 0;
     // ---- 随机种子 (A1: 种子驱动随机 mode, 为分布式可复现性预留) ----
     //   seed 缺失 / 为空 / 为 "-1": 用时间熵 (单机默认, 每次结果不同, 行为不变)
     //   seed 为具体数值        : 确定性种子 (分布式: 服务端给每个 task 存固定 seed,
@@ -140,10 +167,17 @@ inline int engine_main(int argc,char**argv){
     if(mode>=2){varlen_task=0;uint64_t x=1;while(x<CHUNK_SIZE){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
 
     // 预分配 mex_vis (预计 task 数, 留 20% 余量)
-    // mode 1: 每个 prefix 跑完整区间 → 总 task = range_chunks × np
-    // mode 2/3/4: producer 只按 interval 切 chunk → 总 task = range_chunks (不乘 np)
-    uint64_t range_chunks = (rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    uint64_t est_tasks_u = (mode == 1 ? range_chunks * (uint64_t)np : range_chunks);
+    // mode 1 (无 per-prefix ranges): 每个 prefix 跑完整区间 → 总 task = range_chunks × np
+    // mode 2/3/4 (无 per-prefix ranges): producer 只按 interval 切 chunk → 总 task = range_chunks
+    // 有 per-prefix ranges: 每个 prefix 在自己区间内切 chunk → 总 task = sum(各 prefix 的 chunk 数)
+    uint64_t est_tasks_u;
+    if(has_prefix_ranges){
+        est_tasks_u = 0;
+        for(int j=0;j<np;j++) est_tasks_u += (prefix_R[j] - prefix_L[j] + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    } else {
+        uint64_t range_chunks = (rR - rL + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        est_tasks_u = (mode == 1 ? range_chunks * (uint64_t)np : range_chunks);
+    }
     // 安全上限: 10M 条已覆盖任何实际运行场景, 防止超大 range 或 uint64 溢出 (mex_vis 支持动态扩容)
     if (est_tasks_u > 10000000ULL) est_tasks_u = 10000000ULL;
     int est_tasks = (int)(est_tasks_u * 1.2) + 10;
@@ -155,18 +189,37 @@ inline int engine_main(int argc,char**argv){
     // ---- Producer: 生成任务 ----
     // 每个 chunk 的随机决策 (prefix/suffix 选择) 由其 chunk_seed 派生,
     // 不再共享 rng_global, 确保与执行顺序/线程数无关。
+    // 有 prefix_ranges: 每个前缀在自己的 [prefix_L[j], prefix_R[j]) 区间内生成 chunk.
+    // mode 1: 前缀固定 (j), suffix 按 index 轮转
+    // mode 2/3/4: 前缀固定 (j, 由 per-prefix range 决定), suffix 随机 (mode 4 配对)
     auto prod=[&]{
-        if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
-            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
-            TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
-            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);}
-        else for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
-            uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
-            TaskData t;t.L=i;t.R=tr;t.type=mode;
-            t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
-            std::mt19937_64 prng(t.chunk_seed);
-            t.prefix_id=prng()%np+1;t.suffix_id=mode==4?t.prefix_id:prng()%ns+1;
-            q_add(q,t);}
+        if(has_prefix_ranges){
+            for(int j=0;j<np;j++){
+                uint64_t pl=prefix_L[j], pr=prefix_R[j];
+                for(uint64_t i=pl;i<pr;i+=CHUNK_SIZE){
+                    uint64_t tr=i+CHUNK_SIZE;if(tr>pr)tr=pr;
+                    TaskData t;t.L=i;t.R=tr;t.type=mode;
+                    t.prefix_id=j+1;
+                    t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
+                    if(mode==1) t.suffix_id=(j%ns)+1;
+                    else if(mode==4) t.suffix_id=t.prefix_id;
+                    else { std::mt19937_64 prng2(t.chunk_seed); t.suffix_id=prng2()%ns+1; }
+                    q_add(q,t);
+                }
+            }
+        } else {
+            if(mode==1)for(int j=0;j<np;j++)for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
+                uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
+                TaskData t;t.L=i;t.R=tr;t.type=1;t.prefix_id=j+1;t.suffix_id=(j%ns)+1;
+                t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);q_add(q,t);}
+            else for(uint64_t i=rL;i<rR;i+=CHUNK_SIZE){
+                uint64_t tr=i+CHUNK_SIZE;if(tr>rR)tr=rR;
+                TaskData t;t.L=i;t.R=tr;t.type=mode;
+                t.task_id=task_id_counter++;t.chunk_seed=derive_chunk_seed(g_seed,t.task_id);
+                std::mt19937_64 prng(t.chunk_seed);
+                t.prefix_id=prng()%np+1;t.suffix_id=mode==4?t.prefix_id:prng()%ns+1;
+                q_add(q,t);}
+        }
         q_close(q);
     };
 
@@ -179,6 +232,10 @@ inline int engine_main(int argc,char**argv){
     //   consume_mode1() — mode 1 进位检测 + 顺序编码
     //   consume_mode24()— mode 2/4 随机前缀/LR + 顺序编码
     //   consume_mode3() — mode 3 随机前缀 + 随机逐位编码
+
+    // 动态线程数: worker id >= target_threads 时该线程睡眠, 不取任务
+    std::atomic<int> target_threads{n_threads};
+
     auto cons=[&](int cid){(void)cid;Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
@@ -243,7 +300,13 @@ inline int engine_main(int argc,char**argv){
             consume_rand(buf,nlen,name,epre,evar,L,R,rng);
         };
 
-        while(q_get(q,t)){
+        while(true){
+            // 动态线程数: 如果当前线程 id >= target_threads, 睡眠等待
+            if(cid >= target_threads.load(std::memory_order_relaxed)){
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+            if(!q_get(q,t)) break;
             // 每个 chunk 用自己的确定性种子重建 rng (与执行环境无关)
             std::mt19937_64 rng(t.chunk_seed);
             // 构建名字缓冲区: prefix + 占位 + suffix
@@ -287,10 +350,46 @@ inline int engine_main(int argc,char**argv){
                         tmlft/3600,(tmlft%3600)/60,tmlft%60);
                     fflush(output_log?stderr:flog);
                     fflush(output_speed?stderr:fspeed);
+                    // cur_speed: 每 1000 task 输出近期速度 (≈1B 名字), 对齐原版 pbb_all.cpp
+                    if(td%1000==0){
+                        auto t_cur=std::chrono::steady_clock::now();
+                        double cur_sec=std::chrono::duration<double>(t_cur-t_cur_last).count();
+                        long long cur_done=(td-td_cur_last)*CHUNK_SIZE;
+                        long long cur_tmlft=ALL_totnum>done_num?((ALL_totnum-done_num)*1.0/cur_done)*cur_sec:0;
+                        if(cur_sec>0)
+                            fprintf(fspeed,"cur_speed:%.6fT/d,time left(?):%lldh%lldm%llds\n\n",
+                                86400.0*(cur_done/1e12)/cur_sec,
+                                cur_tmlft/3600,(cur_tmlft%3600)/60,cur_tmlft%60);
+                        fflush(output_speed?stderr:fspeed);
+                        t_cur_last=t_cur;td_cur_last=td;
+                    }
                 }
             }
             local_found=0;local_max_sum=local_max_xp=local_max_xd=0;
         }};
+
+    // ---- 动态线程数: 通过控制文件 out/.threads 运行时调整 ----
+    //   写入整数到 out/.threads 即可实时增减 Worker 线程 (1 ~ n_threads)
+    //   excess 线程在每次 chunk 前 sleep 500ms 等待唤醒
+    std::thread reader_thread([&]{
+        // Poll control file every second (轻量, 不影响性能)
+        std::string ctl_path = "out/.threads";
+        int last_val = n_threads;
+        while(true){
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            FILE* f = fopen(ctl_path.c_str(), "r");
+            if(!f) continue;
+            int val = -1;
+            if(fscanf(f, "%d", &val) == 1 && val >= 1 && val <= n_threads && val != last_val){
+                target_threads.store(val);
+                fprintf(stderr, "\n[engine] threads → %d\n", val);
+                fflush(stderr);
+                last_val = val;
+            }
+            fclose(f);
+        }
+    });
+    reader_thread.detach();  // 守护线程, 进程退出时自动清理
 
     // 启动线程
     DBG("creating 1 producer + %d consumers...",n_threads);

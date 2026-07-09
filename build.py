@@ -198,6 +198,114 @@ def _py_link_flags():
     return flags
 
 
+def _mingw_python_link() -> list[str]:
+    """Generate MinGW-compatible libpython from MSVC python DLL via gendef+dlltool.
+    Returns list of link flags (e.g. ['-Lbuild/mingw_lib', '-lpython314']).
+    Cached — only generated once per session.
+    """
+    cache_dir = os.path.join(BUILD_DIR, "mingw_lib")
+    ver = f"{sys.version_info.major}{sys.version_info.minor}"
+    lib_a = os.path.join(cache_dir, f"libpython{ver}.a")
+
+    if os.path.exists(lib_a):
+        return [f"-L{cache_dir}", f"-lpython{ver}"]
+
+    # Find python DLL
+    dll = None
+    candidates = [
+        os.path.join(sys.base_prefix, f"python{ver}.dll"),
+        os.path.join(sys.prefix, f"python{ver}.dll"),
+    ]
+    # uv installs Python to a non-standard path — exec dir is reliable
+    exe_dir = os.path.dirname(getattr(sys, '_base_executable', sys.executable))
+    candidates.append(os.path.join(exe_dir, f"python{ver}.dll"))
+    # Also check directory of full python3.dll if found
+    for c_dir in [sys.base_prefix, sys.prefix, exe_dir]:
+        try:
+            import glob as _glob
+            hits = _glob.glob(os.path.join(c_dir, f"python{ver}*.dll"))
+            for h in hits:
+                if h not in candidates:
+                    candidates.append(h)
+        except:
+            pass
+    for c in candidates:
+        if os.path.exists(c):
+            dll = c
+            break
+    if not dll:
+        import ctypes, glob as _glob
+        try:
+            dll = _glob.glob(os.path.join(sys.prefix, "python*.dll"))
+            if dll:
+                dll = dll[0]
+        except:
+            pass
+    if not dll:
+        print("[build] WARNING: cannot find python DLL for gendef", file=sys.stderr)
+        return _py_link_flags()
+
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Find gendef/dlltool (bundled with MinGW g++)
+    gendef = shutil.which("gendef")
+    dlltool = shutil.which("dlltool")
+    # Fallback to msys2 paths
+    if not gendef:
+        for p in [r"C:\msys64\mingw64\bin\gendef.exe", r"C:\msys64\ucrt64\bin\gendef.exe"]:
+            if os.path.exists(p): gendef = p; break
+    if not dlltool:
+        for p in [r"C:\msys64\mingw64\bin\dlltool.exe", r"C:\msys64\ucrt64\bin\dlltool.exe"]:
+            if os.path.exists(p): dlltool = p; break
+
+    if not gendef or not dlltool:
+        print("[build] WARNING: gendef/dlltool not found — falling back to MSVC .lib", file=sys.stderr)
+        return _py_link_flags()
+
+    def_file = os.path.join(cache_dir, f"python{ver}.def")
+    r = subprocess.run([gendef, dll], capture_output=True, cwd=cache_dir, encoding='utf-8', errors='replace')
+    if r.returncode != 0:
+        print(f"[build] WARNING: gendef failed: {r.stderr[-200:]}", file=sys.stderr)
+        return _py_link_flags()
+    # gendef outputs to current dir, named python{ver}.def
+    gendef_out = os.path.join(cache_dir, os.path.basename(dll).replace(".dll", ".def"))
+    if not os.path.exists(gendef_out) and os.path.exists(os.path.join(os.getcwd(), os.path.basename(dll).replace(".dll", ".def"))):
+        # gendef wrote to cwd
+        import shutil as _shutil
+        _shutil.move(os.path.join(os.getcwd(), os.path.basename(dll).replace(".dll", ".def")), gendef_out)
+    if not os.path.exists(gendef_out):
+        # try common naming
+        for f in os.listdir(cache_dir):
+            if f.endswith(".def"):
+                gendef_out = os.path.join(cache_dir, f)
+                break
+
+    r2 = subprocess.run([dlltool, "-d", gendef_out, "-l", lib_a, "-D", dll],
+                         capture_output=True, cwd=cache_dir, encoding='utf-8', errors='replace')
+    if r2.returncode != 0:
+        print(f"[build] WARNING: dlltool failed: {r2.stderr[-200:]}", file=sys.stderr)
+        return _py_link_flags()
+
+    if os.path.exists(lib_a):
+        print(f"[build] Generated MinGW lib: {lib_a}", file=sys.stderr)
+        return [f"-L{cache_dir}", f"-lpython{ver}"]
+    return _py_link_flags()
+
+
+def _cxxflags_override(target, compiler_name, auto_flags, simd_name, verbose):
+    """If PBB_CXXFLAGS set, use it directly; otherwise return auto_flags.
+    PBB_CXXFLAGS can be a space-separated string of compiler flags.
+    Example: PBB_CXXFLAGS="-march=native -Ofast -funroll-loops -ffast-math"
+    """
+    env_flags = os.environ.get("PBB_CXXFLAGS", "").strip()
+    if not env_flags:
+        return auto_flags
+    user_flags = env_flags.split()
+    if verbose or True:  # always show override
+        print(f"[build] {target}: overriding flags → PBB_CXXFLAGS={env_flags}", file=sys.stderr)
+    return user_flags
+
+
 def _compile(name, flags, is_msvc, src, out, extra_includes=[], extra_link=[],
              shared=False):
     if is_msvc:
@@ -247,8 +355,12 @@ def _compile_pbb_core(verbose=False):
         extra_link = link[:]
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
+            extra_link = _mingw_python_link()
 
-        cmd = _compile(name, flags, is_msvc, src, out,
+        # PBB_CXXFLAGS 环境变量: 覆盖自动检测的 flags
+        overrides = _cxxflags_override("pbb_core", name, flags, simd_name, verbose)
+
+        cmd = _compile(name, overrides, is_msvc, src, out,
                        extra_includes=includes, extra_link=extra_link, shared=True)
         if verbose:
             print(f"[build] pbb_core [{name}]: {' '.join(cmd)}", file=sys.stderr)
@@ -279,7 +391,11 @@ def _compile_engine(verbose=False):
     for name, flags, simd_name, is_msvc in compilers:
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
-        cmd = _compile(name, flags, is_msvc, src, out, extra_includes=includes)
+
+        # PBB_CXXFLAGS 环境变量: 覆盖自动检测的 flags
+        overrides = _cxxflags_override("engine", name, flags, simd_name, verbose)
+
+        cmd = _compile(name, overrides, is_msvc, src, out, extra_includes=includes)
         if verbose:
             print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
         print(f"[build] engine: {name} ({simd_name})", file=sys.stderr)
