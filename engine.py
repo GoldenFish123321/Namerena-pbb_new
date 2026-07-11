@@ -235,7 +235,6 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
 
         # 引擎权威摘要 (问题4/5: SUMMARY 行由引擎输出, Python 采信不重算)
         summary = None
-        last_count = 0.0  # 从进度行解析的已处理名字数 (T), 中断时用于估算速度
         for line in proc.stderr:
             line = line.strip()
             if not line:
@@ -247,16 +246,6 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
                     k, _, v = tok.partition("=")
                     summary[k] = v
                 continue
-            # 从进度行提取已处理计数 (格式: "taskX finished,task_mex=Y,count:Z.ZZZT")
-            if "count:" in line and line.rstrip().endswith("T"):
-                try:
-                    idx = line.find("count:")
-                    if idx != -1:
-                        end = line.find("T", idx)
-                        if end != -1:
-                            last_count = float(line[idx+6:end])
-                except ValueError:
-                    pass
             print(f"  {line}", file=sys.stderr, flush=True)
         proc.wait()
         elapsed = time.time() - t0
@@ -304,12 +293,9 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
 
     # 回退路径 (无摘要: 引擎中断/崩溃/旧版本)
     # 修复 (2026-07-12): 中断时 range 可能是 2^64-1 (end=-1), 用 rng/elapsed 会算出荒谬速度。
-    # 中断时从进度行提取 last_count (T) 估算速度; 正常崩溃仍用 range 反算。
+    # 此时无法得知实际处理量, 设 speed=0; 仅正常结束但缺失摘要时才用 range 反算。
     if _interrupted:
-        if last_count > 0 and elapsed > 0:
-            speed = (last_count * 1e12) / elapsed  # T → 名字数 → 名字/秒
-        else:
-            speed = 0.0
+        speed = 0.0
     else:
         rng = config["range_R"] - config["range_L"]
         speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
