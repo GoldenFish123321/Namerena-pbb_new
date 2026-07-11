@@ -235,6 +235,8 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
 
         # 引擎权威摘要 (问题4/5: SUMMARY 行由引擎输出, Python 采信不重算)
         summary = None
+        last_count_t = 0.0   # 进度行最后上报: 已处理名字数 (T)
+        last_etime = 0.0     # 进度行最后上报: 引擎耗时 (秒)
         for line in proc.stderr:
             line = line.strip()
             if not line:
@@ -246,6 +248,26 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
                     k, _, v = tok.partition("=")
                     summary[k] = v
                 continue
+            # 进度行1: "taskX finished,task_mex=Y,count:Z.ZZZT" → 提取已处理名字数 (T)
+            if "count:" in line and line.rstrip().endswith("T"):
+                try:
+                    idx = line.find("count:")
+                    if idx != -1:
+                        end = line.find("T", idx)
+                        if end != -1:
+                            last_count_t = float(line[idx+6:end])
+                except ValueError:
+                    pass
+            # 进度行2: "tot=...,time: X.XXs, speed: ..." → 提取引擎耗时 (秒)
+            if "time:" in line and "speed:" in line:
+                try:
+                    idx = line.find("time: ")
+                    if idx != -1:
+                        end = line.find("s", idx)
+                        if end != -1:
+                            last_etime = float(line[idx+6:end])
+                except ValueError:
+                    pass
             print(f"  {line}", file=sys.stderr, flush=True)
         proc.wait()
         elapsed = time.time() - t0
@@ -279,20 +301,31 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         if _use_temp:
             _tmp.cleanup()
 
-    # 问题4/5: 优先采信引擎权威摘要 (max 含通过 V 值/技能检查的名字、speed 为纯算力吞吐)。
-    # 文件重算的 max 仅是达标名字的 max (语义不同), 墙钟反算的 speed 含 IPC 噪声。
-    # 摘要缺失时 (旧引擎/异常) 回退到文件重算 + 墙钟反算, 保证健壮性。
+    # 权威摘要: max/found 采信引擎
     if summary is not None:
         max_xp = int(summary.get("max_xp", mxp))
         max_xd = int(summary.get("max_xd", mxd))
         max_sum = int(summary.get("max_sum", 0))
         found = int(summary.get("found", len(results)))
-        speed = float(summary.get("speed", 0.0))
-        return {"results": results, "max_xp": max_xp, "max_xd": max_xd,
-                "max_sum": max_sum, "found": found, "speed": speed}
+    else:
+        max_xp, max_xd, max_sum = mxp, mxd, 0
+        found = len(results)
 
-    # 回退路径 (无摘要)
-    rng = config["range_R"] - config["range_L"]
-    speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
-    return {"results": results, "max_xp": mxp, "max_xd": mxd,
-            "max_sum": 0, "found": len(results), "speed": speed}
+    # speed: SUMMARY 是整体速度 (总量/总时间); 中断时用进度行 count/time 估算;
+    #        均无则 rng/elapsed (回退, end=-1 时不可用 → 设 0)
+    if summary is not None:
+        # 正常完成: SUMMARY speed = ALL_totnum/calc_sec, 即整体吞吐
+        speed = float(summary.get("speed", 0.0))
+        if speed <= 0:
+            speed = 0.0
+    elif _interrupted and last_count_t > 0 and last_etime > 0:
+        # 中断: 用最后进度行的 count/time 估算整体速度 (名字/秒)
+        speed = (last_count_t * 1e12) / last_etime
+    elif _interrupted:
+        speed = 0.0
+    else:
+        rng = config["range_R"] - config["range_L"]
+        speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
+
+    return {"results": results, "max_xp": max_xp, "max_xd": max_xd,
+            "max_sum": max_sum, "found": found, "speed": speed}
