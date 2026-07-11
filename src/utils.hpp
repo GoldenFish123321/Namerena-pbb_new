@@ -188,3 +188,161 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
   }
 }
 #endif
+
+// ===== NEON 稳定压缩查找表 (Issue #17 附件 E14) =====
+// 将 8 位 lane mask 映射为 vtbl1_u8 的 shuffle 索引和匹配计数。
+// constexpr 编译期计算，零运行时开销。
+#if PBB_HAS_NEON
+struct Compress8Table {
+  u8_t indexes[256][8];
+  u8_t counts[256];
+  constexpr Compress8Table() {
+    for (int mask = 0; mask < 256; mask++) {
+      int count = 0;
+      for (int lane = 0; lane < 8; lane++)
+        if (mask & (1 << lane)) indexes[mask][count++] = lane;
+      for (int lane = count; lane < 8; lane++) indexes[mask][lane] = 0xff;
+      counts[mask] = count;
+    }
+  }
+};
+static constexpr Compress8Table compress8_table{};
+#endif
+
+// ===== SIMD 过滤 + 稳定压缩 (Issue #17 方向二) =====
+// 将逐字节分支替换为 SIMD 比较 → 位掩码 → 只遍历匹配字节，
+// 消除数据依赖的分支预测失败。
+
+// ---- 属性过滤: ual[i] ∈ [89, 217), 输出 ual[i] & 63 ----
+// 用在 finish_load() / loading_name() 的 SIMD 路径
+#if PBB_HAS_AVX512
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  for (int i = 0; i < 256 && q_len < max_count; i += 64) {
+    __m512i data = _mm512_loadu_si512((const __m512i*)&ual[i]);
+    __mmask64 ge = _mm512_cmp_epu8_mask(data, _mm512_set1_epi8(88), _MM_CMPINT_GT);
+    __mmask64 lt = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), data, _MM_CMPINT_GT); // 217 > data ≡ data < 217
+    __mmask64 mask = ge & lt;
+    while (mask && q_len < max_count) {
+      int idx = __builtin_ctzll(mask);
+      name_base[++q_len] = ual[i + idx] & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i += 64) {
+    __m512i data = _mm512_loadu_si512((const __m512i*)&ual[i]);
+    // high bit == 0 ≡ data < 0x80 (无符号)
+    __mmask64 mask = _mm512_cmp_epu8_mask(data, _mm512_set1_epi8(0x80), _MM_CMPINT_LT);
+    while (mask) {
+      int idx = __builtin_ctzll(mask);
+      name_base[++q_len] = (ual[i + idx] + 89) & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+#elif PBB_HAS_AVX2
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  const __m256i v88  = _mm256_set1_epi8(88); // subs(data, 88) != 0 ≡ data > 88 ≡ data >= 89
+  const __m256i v216 = _mm256_set1_epi8(216); // subs(data, 216) == 0 ≡ data <= 216 ≡ data < 217
+  const __m256i vzero = _mm256_setzero_si256();
+  for (int i = 0; i < 256 && q_len < max_count; i += 32) {
+    __m256i data = _mm256_loadu_si256((const __m256i*)&ual[i]);
+    // ual >= 89 (无符号): ual - 88 不下溢 → subs != 0, 取反 cmpeq (用 88 保证 89 也被匹配)
+    __m256i ge = _mm256_xor_si256(
+        _mm256_cmpeq_epi8(_mm256_subs_epu8(data, v88), vzero),
+        _mm256_set1_epi8(0xFF));
+    // ual < 217 (无符号): ual - 216 下溢 → subs == 0
+    __m256i lt = _mm256_cmpeq_epi8(_mm256_subs_epu8(data, v216), vzero);
+    unsigned mask = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge, lt));
+    while (mask && q_len < max_count) {
+      int idx = __builtin_ctz(mask);
+      name_base[++q_len] = ual[i + idx] & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i += 32) {
+    __m256i data = _mm256_loadu_si256((const __m256i*)&ual[i]);
+    // movemask 提取每个字节的高位; 取反后 bit=1 表示高位为 0 (匹配)
+    unsigned mask = (unsigned)~_mm256_movemask_epi8(data);
+    while (mask) {
+      int idx = __builtin_ctz(mask);
+      name_base[++q_len] = (ual[i + idx] + 89) & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+#elif PBB_HAS_NEON
+// NEON: 8 字节比较 → vaddv_u8 位掩码 → vtbl1_u8 查表稳定压缩
+// Compress8Table 将 256 种 lane mask 映射为有序 shuffle 索引，
+// 消除逐字节分支预测失败。附件 E14 证明此路径在 ARM 上收益 +37%。
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  const uint8x8_t lower = vdup_n_u8(89);
+  const uint8x8_t upper = vdup_n_u8(217);
+  const uint8x8_t low_bits = vdup_n_u8(63);
+  const uint8x8_t bit_weights = {1, 2, 4, 8, 16, 32, 64, 128};
+  for (int i = 0; i < 256 && q_len < max_count; i += 8) {
+    uint8x8_t data = vld1_u8(&ual[i]);
+    uint8x8_t selected = vand_u8(vcge_u8(data, lower), vclt_u8(data, upper));
+    int mask = vaddv_u8(vand_u8(selected, bit_weights));
+    if (mask) {
+      uint8x8_t compacted = vtbl1_u8(vand_u8(data, low_bits),
+                                      vld1_u8(compress8_table.indexes[mask]));
+      vst1_u8(name_base + q_len + 1, compacted);
+      q_len += compress8_table.counts[mask];
+    }
+  }
+  if (q_len > max_count) q_len = max_count;
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  const uint8x8_t high_bit = vdup_n_u8(0x80);
+  const uint8x8_t offset = vdup_n_u8(89);
+  const uint8x8_t low_bits = vdup_n_u8(63);
+  const uint8x8_t bit_weights = {1, 2, 4, 8, 16, 32, 64, 128};
+  const uint8x8_t zero = vdup_n_u8(0);
+  for (int i = 0; i < 256; i += 8) {
+    uint8x8_t data = vld1_u8(&ual[i]);
+    uint8x8_t selected = vceq_u8(vand_u8(data, high_bit), zero);
+    int mask = vaddv_u8(vand_u8(selected, bit_weights));
+    if (mask) {
+      uint8x8_t compacted = vtbl1_u8(vand_u8(vadd_u8(data, offset), low_bits),
+                                      vld1_u8(compress8_table.indexes[mask]));
+      vst1_u8(name_base + q_len + 1, compacted);
+      q_len += compress8_table.counts[mask];
+    }
+  }
+}
+
+#else
+// 标量回退: 无 SIMD 平台
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  for (int i = 0; i < 256 && q_len < max_count; i++)
+    if (ual[i] >= 89 && ual[i] < 217)
+      name_base[++q_len] = ual[i] & 63;
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i++)
+    if ((ual[i] & 0x80) == 0)
+      name_base[++q_len] = (ual[i] + 89) & 63;
+}
+#endif
