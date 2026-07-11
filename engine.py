@@ -291,8 +291,13 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
         return {"results": results, "max_xp": max_xp, "max_xd": max_xd,
                 "max_sum": max_sum, "found": found, "speed": speed}
 
-    # 回退路径 (无摘要)
-    rng = config["range_R"] - config["range_L"]
-    speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
+    # 回退路径 (无摘要: 引擎中断/崩溃/旧版本)
+    # 修复 (2026-07-12): 中断时 range 可能是 2^64-1 (end=-1), 用 rng/elapsed 会算出荒谬速度。
+    # 此时无法得知实际处理量, 设 speed=0; 仅正常结束但缺失摘要时才用 range 反算。
+    if _interrupted:
+        speed = 0.0
+    else:
+        rng = config["range_R"] - config["range_L"]
+        speed = rng / elapsed if elapsed > 0 and rng > 0 else 0
     return {"results": results, "max_xp": mxp, "max_xd": mxd,
             "max_sum": 0, "found": len(results), "speed": speed}
