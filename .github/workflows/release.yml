@@ -1,0 +1,385 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.3）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 构建矩阵：6 个目标 CPU 并行 ──
+  build:
+    name: 'Build ${{ matrix.target }}'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: intel-sandybridge-avx
+            march: sandybridge
+            simd_display: 'none'
+            cpu_label: 'Intel Sandy Bridge'
+            cpu_cover: 'Intel Core i3-2120'
+
+          - target: intel-alderlake-avx2
+            march: alderlake
+            simd_display: 'AVX2'
+            cpu_label: 'Intel Alder Lake'
+            cpu_cover: 'i5-12600KF'
+
+          - target: intel-raptorlake-avx2
+            march: raptorlake
+            simd_display: 'AVX2'
+            cpu_label: 'Intel Raptor Lake / Refresh'
+            cpu_cover: 'i5-1340P、i9-13900HX、i7-14700HX'
+
+          - target: amd-zen3-avx2
+            march: znver3
+            simd_display: 'AVX2'
+            cpu_label: 'AMD Zen3 / Ryzen 5000'
+            cpu_cover: 'Ryzen 5000 同类'
+
+          - target: amd-zen4-avx512
+            march: znver4
+            simd_display: 'AVX-512'
+            cpu_label: 'AMD Zen4 / Hawk Point'
+            cpu_cover: '8845HS 等'
+
+          - target: amd-zen5-avx512
+            march: znver5
+            simd_display: 'AVX-512'
+            cpu_label: 'AMD Zen5 / Zen5c / Fire Range'
+            cpu_cover: 'Ryzen AI 9、9955HX3D'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 解析版本号 ──
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VER="${{ github.event.inputs.version }}"
+          else
+            VER="${GITHUB_REF_NAME#v}"
+          fi
+          # 统一 dots: 0_1_3 → 0.1.3
+          VER="${VER//_/.}"
+          # 校验版本号格式
+          if ! echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: invalid version format: $VER (expected X.Y.Z)"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+          # 构造 tag 名 (dots → underscores)
+          VER_TAG="${VER//./_}"
+          echo "ver_tag=$VER_TAG" >> "$GITHUB_OUTPUT"
+
+      # ── 校验 main.py APP_VERSION 与 tag 一致 ──
+      - name: Validate APP_VERSION
+        shell: bash
+        run: |
+          APP_VER=$(grep -oP 'APP_VERSION\s*=\s*"\K[^"]+' main.py)
+          TAG_VER="${{ steps.version.outputs.version }}"
+          if [ "$APP_VER" != "$TAG_VER" ]; then
+            echo "ERROR: APP_VERSION mismatch: main.py=$APP_VER, tag=$TAG_VER"
+            echo "Update APP_VERSION in main.py before tagging."
+            exit 1
+          fi
+          echo "[check] APP_VERSION=$APP_VER matches tag"
+
+      # ── Python ──
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps
+        run: pip install pybind11 pyyaml pyinstaller tomli
+
+      # ── MSYS2 UCRT64 GCC ──
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ucrt64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+
+      # ── 定位 Python 路径 ──
+      - name: Locate Python paths
+        id: py
+        shell: bash
+        run: |
+          PY_INCLUDE="$(python -c "import sysconfig; print(sysconfig.get_path('include'))")"
+          PY_LIBS="$(python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")"
+          PY_VER="$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")"
+          echo "include=$PY_INCLUDE" >> "$GITHUB_OUTPUT"
+          echo "libs=$PY_LIBS" >> "$GITHUB_OUTPUT"
+          echo "ver=$PY_VER" >> "$GITHUB_OUTPUT"
+
+      # ── 编译 pbb_core.pyd ──
+      - name: Build pbb_core
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p build
+          g++ -std=c++17 -O3 -funroll-loops -ffast-math \
+            -march=${{ matrix.march }} \
+            -static -static-libgcc -static-libstdc++ \
+            -shared \
+            -I src \
+            "-I$(cygpath -u "${{ steps.py.outputs.include }}")" \
+            -I "$(python -c 'import pybind11; print(pybind11.get_include())')" \
+            -o "build/pbb_core.cp${{ steps.py.outputs.ver }}-win_amd64.pyd" \
+            src/bridge.cpp \
+            "$(cygpath -u "${{ steps.py.outputs.libs }}")/python${{ steps.py.outputs.ver }}.lib"
+          echo "[build] pbb_core done"
+
+      # ── 编译 pbb_engine.exe ──
+      - name: Build pbb_engine
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p build
+          g++ -std=c++17 -O3 -funroll-loops -ffast-math \
+            -march=${{ matrix.march }} \
+            -static -static-libgcc -static-libstdc++ \
+            -I src \
+            -o build/pbb_engine.exe \
+            engine_main.cpp
+          echo "[build] pbb_engine done"
+
+      # ── 获取 build 绝对路径 (Windows 风格) ──
+      - name: Build absolute path
+        id: builddir
+        shell: bash
+        run: |
+          # cygpath 将 MSYS2/Git Bash 的 Unix 路径转为 Windows 路径
+          WIN_PWD="$(cygpath -w "$(pwd)" 2>/dev/null || echo "$(pwd -W 2>/dev/null)" || pwd)"
+          echo "path=$WIN_PWD/build" >> "$GITHUB_OUTPUT"
+
+      # ── PyInstaller 打包 ──
+      - name: PyInstaller
+        run: |
+          $buildAbs = "${{ steps.builddir.outputs.path }}"
+          $pkgName  = "pbb-windows-x64-${{ matrix.target }}"
+          pyinstaller `
+            --noconfirm --clean --onedir `
+            --name $pkgName `
+            --distpath release `
+            --workpath release_build/pyinstaller-work `
+            --specpath release_build `
+            --paths "$buildAbs" `
+            --add-data "$buildAbs;build" `
+            release_entry.py
+          Write-Host "[release] PyInstaller done"
+
+      # ── 复制配置示例文件 ──
+      - name: Copy example configs
+        run: |
+          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
+          Copy-Item config.example.json $pkg/config.example.json -Force
+          Copy-Item config.example.toml $pkg/config.example.toml -Force
+          Copy-Item config.example.yaml $pkg/config.example.yaml -Force
+
+      # ── 生成包内 README (中文) ──
+      - name: Generate README
+        shell: bash
+        run: |
+          cat > "release/pbb-windows-x64-${{ matrix.target }}/README.txt" << 'README_EOF'
+          PBB Windows 预编译包
+
+          版本号：${{ steps.version.outputs.version }}
+
+          最佳适用范围：
+            Windows 10/11 x64
+            ${{ matrix.cpu_label }}
+            覆盖：${{ matrix.cpu_cover }}
+
+          编译参数：
+            -march=${{ matrix.march }}
+            运行 SIMD：${{ matrix.simd_display }}
+
+          包含文件：
+            PBB 主程序
+            Python runtime
+            pbb_core*.pyd
+            pbb_engine.exe
+            config.example.json / config.example.toml / config.example.yaml
+
+          使用方法：
+            1. 从三个 config.example.* 中任选一种复制为 config.json / config.toml / config.yaml。
+            2. 修改配置里的 team_name、prefixes、suffixes、character_set、enumeration、collection、threads 等字段。
+            3. 运行：
+                 pbb-windows-x64-${{ matrix.target }}.exe -c config.toml
+               或：
+                 run.bat -c config.toml
+            4. 不指定 -c 时，程序会依次尝试 config.json、config.yaml、config.toml。
+            5. 结果默认写入 out/。
+
+          常用命令：
+            pbb-windows-x64-${{ matrix.target }}.exe -c config.toml
+            pbb-windows-x64-${{ matrix.target }}.exe -c config.toml --threads 8
+            pbb-windows-x64-${{ matrix.target }}.exe -c config.toml --mode 1 --vlen 4 --range-start 0 --range-end 50000
+            pbb-windows-x64-${{ matrix.target }}.exe -c config.toml --xp-min 5000 --xd-min 6000
+            pbb-windows-x64-${{ matrix.target }}.exe -c config.toml --output-dest both -o result.txt
+            pbb-windows-x64-${{ matrix.target }}.exe --help
+
+          注意：
+            本包是预编译包，--rebuild 不用于用户机器。
+          README_EOF
+
+      # ── 生成 smoke 配置 + 运行验证 ──
+      - name: Smoke test
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
+          
+          # Step 1: --help
+          & "$pkg/pbb-windows-x64-${{ matrix.target }}.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
+          
+          # Step 2: smoke run
+          @"
+          team_name = "smoke"
+          character_set = { single_char_length = 2, types = [1,2,3] }
+          enumeration = { mode = 1, variable_length = 4, ranges = [{ start = 0, end = 1000 }] }
+          collection = { collect_mode = 0 }
+          output = { log_output = 0, speed_output = 0, result_file = "-" }
+          threads = { worker_threads = 2 }
+          debug_mode = 1
+          "@ | Out-File -Encoding utf8 release_build/smoke.config.toml
+          
+          $output = & "$pkg/pbb-windows-x64-${{ matrix.target }}.exe" -c release_build/smoke.config.toml --output-dest stdout 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+          
+          # Check version in output
+          if ($output -notmatch "Version: $ver") {
+            Write-Host "OUTPUT: $output"
+            throw "version not found in output"
+          }
+          
+          # Step 3: Check config files
+          $configs = Get-ChildItem $pkg -Filter "config.example.*"
+          if ($configs.Count -lt 3) { throw "missing config.example files" }
+          
+          Write-Host "[smoke] PASS"
+
+      # ── 清理 + 打包 ZIP ──
+      - name: Create ZIP
+        run: |
+          $ver   = "${{ steps.version.outputs.version }}"
+          $pkg   = "release/pbb-windows-x64-${{ matrix.target }}"
+          $zip   = "release/pbb-windows-x64-${{ matrix.target }}-${ver}.zip"
+          
+          # 确保发布目录内没有不该有的文件
+          $bad = Get-ChildItem $pkg -Filter "config.json","config.toml","config.yaml" -ErrorAction SilentlyContinue
+          if ($bad) { throw "found real config in release dir!" }
+          $bad = Get-ChildItem $pkg -Directory -Filter "out" -ErrorAction SilentlyContinue
+          if ($bad) { throw "found out/ in release dir!" }
+          
+          Compress-Archive -Path "$pkg/*" -DestinationPath $zip -Force
+          Write-Host "[release] ZIP: $zip"
+
+      # ── 上传构建产物 ──
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pbb-windows-x64-${{ matrix.target }}-${{ steps.version.outputs.version }}
+          path: release/*.zip
+          retention-days: 7
+
+  # ── 创建 GitHub Release ──
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ── 解析版本号 ──
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VER="${{ github.event.inputs.version }}"
+          else
+            VER="${GITHUB_REF_NAME#v}"
+          fi
+          # 统一 dots: 0_1_3 → 0.1.3
+          VER="${VER//_/.}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "ver_tag=${VER//./_}" >> "$GITHUB_OUTPUT"
+
+      # ── 下载所有构建产物 ──
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      # ── 提取 Changelog ──
+      - name: Extract changelog
+        id: changelog
+        run: |
+          python3 - "${{ steps.version.outputs.version }}" << 'PYEOF'
+          import sys, re
+
+          ver = sys.argv[1]
+          with open("Changelog.md", encoding="utf-8") as f:
+              text = f.read()
+
+          # 匹配 "## <version>" 到下一个 "## " 或 EOF
+          pattern = rf'^## {re.escape(ver)}\s*$(.*?)(?=^## |\Z)'
+          m = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+
+          if not m:
+              print(f"WARNING: version {ver} not found in Changelog.md", file=sys.stderr)
+              body = f"## {ver}\n\n(未找到变更记录)"
+          else:
+              body = f"## {ver}{m.group(1).rstrip()}"
+
+          with open("release_body.md", "w", encoding="utf-8") as f:
+              f.write(body)
+          print(f"[changelog] wrote {len(body)} chars")
+          PYEOF
+
+      # ── 生成 CPU 兼容表追加到 body ──
+      - name: Build release body
+        run: |
+          cat >> release_body.md << 'EOF'
+
+          ## 包名与适用范围
+
+          | 包名 | 适用范围 |
+          | -- | -- |
+          | pbb-windows-x64-intel-sandybridge-avx-REPLACE_VER.zip | Intel Sandy Bridge，覆盖 Intel Core i3-2120；`-march=sandybridge` |
+          | pbb-windows-x64-intel-alderlake-avx2-REPLACE_VER.zip | Intel Alder Lake，覆盖 i5-12600KF；`-march=alderlake`，AVX2 |
+          | pbb-windows-x64-intel-raptorlake-avx2-REPLACE_VER.zip | Intel Raptor Lake / Refresh，覆盖 i5-1340P、i9-13900HX、i7-14700HX；`-march=raptorlake`，AVX2 |
+          | pbb-windows-x64-amd-zen3-avx2-REPLACE_VER.zip | AMD Zen3 / Ryzen 5000 同类；`-march=znver3`，AVX2 |
+          | pbb-windows-x64-amd-zen4-avx512-REPLACE_VER.zip | AMD Zen4 / Hawk Point，覆盖 8845HS 等；`-march=znver4`，AVX-512 |
+          | pbb-windows-x64-amd-zen5-avx512-REPLACE_VER.zip | AMD Zen5 / Zen5c / Fire Range，覆盖 Ryzen AI 9、9955HX3D；`-march=znver5`，AVX-512 |
+          EOF
+          sed -i "s/REPLACE_VER/${{ steps.version.outputs.version }}/g" release_body.md
+
+      # ── 创建 Release + 上传 ──
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "pbb_new_${{ steps.version.outputs.ver_tag }}"
+          tag_name: "${{ steps.version.outputs.ver_tag }}"
+          body_path: release_body.md
+          files: artifacts/*
+          prerelease: true
