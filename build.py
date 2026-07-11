@@ -149,11 +149,15 @@ def _find_compilers(verbose=False):
         if is_win:
             # -xHost still crashes on Arrow Lake (LLVM bug in bridge.cpp).
             # -xCORE-AVX2 is the only stable choice for both pbb_core and engine.
-            # -mavxvnni enables AVX-VNNI (VPDPBUSD) for int8 dot-product acceleration.
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xCORE-AVX2", "-mavxvnni"]
-            entries.append((icpx, flags, "AVX2+VNNI", False))
+                     "-qopenmp", "-xCORE-AVX2"]
+            simd_label = "AVX2"
+            # AVX-VNNI probe: older icpx may not support -mavxvnni
+            if _compiler_probe(icpx, "-mavxvnni"):
+                flags.append("-mavxvnni")
+                simd_label = "AVX2+VNNI"
+            entries.append((icpx, flags, simd_label, False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
