@@ -5,10 +5,91 @@ PBB build system — compiler detection, SIMD probing, unified compilation.
 Called by main.py via ensure_all(rebuild, verbose).
 Not meant to be run directly — use ./run.sh or run.bat.
 """
-import os, sys, shutil, subprocess, tempfile, sysconfig
+import os, sys, shutil, subprocess, tempfile, sysconfig, ctypes, platform
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join(BASE_DIR, "build")
+
+
+# ---- CPU feature detection (no compilation required) ----
+def _cpu_has_vnni():
+    """Check if host CPU supports AVX-VNNI.
+
+    AVX-VNNI (VPDPBUSD with YMM/XMM): CPUID leaf 7, subleaf 1, EAX bit 4.
+    AVX512-VNNI (VPDPBUSD with ZMM):  CPUID leaf 7, subleaf 0, ECX bit 11.
+    We check both — either one qualifies.
+    """
+    # Linux / Android / Termux: read /proc/cpuinfo
+    if sys.platform != "win32" and sys.platform != "darwin":
+        try:
+            with open("/proc/cpuinfo") as f:
+                info = f.read().lower()
+                return "avxvnni" in info or "avx512_vnni" in info or "avx512vnni" in info
+        except Exception:
+            return False
+
+    # macOS: use sysctl
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["sysctl", "-a"], capture_output=True,
+                               text=True, timeout=5, encoding="utf-8", errors="replace")
+            info = r.stdout.lower()
+            return "avxvnni" in info or "avx512_vnni" in info or "avx512vnni" in info
+        except Exception:
+            return False
+
+    # Windows: execute CPUID instruction via ctypes
+    try:
+        is_64 = platform.machine().endswith("64")
+        if not is_64:
+            return False
+
+        # Helper: run CPUID with given leaf/subleaf, return specified register
+        def _cpuid(leaf, subleaf, ret_reg):
+            code = bytearray()
+            if subleaf:
+                code += bytes([0xB9, subleaf, 0, 0, 0])  # mov ecx, subleaf
+            else:
+                code += bytes([0x31, 0xC9])               # xor ecx, ecx
+            code += bytes([0xB8, leaf & 0xFF, (leaf >> 8) & 0xFF, 0, 0])  # mov eax, leaf
+            code += bytes([0x0F, 0xA2])                   # cpuid
+            if ret_reg == "eax":
+                pass
+            elif ret_reg == "ecx":
+                code += bytes([0x89, 0xC8])               # mov eax, ecx
+            elif ret_reg == "ebx":
+                code += bytes([0x89, 0xD8])               # mov eax, ebx
+            else:
+                code += bytes([0x89, 0xD0])               # mov eax, edx
+            code += bytes([0xC3])                         # ret
+
+            buf = (ctypes.c_char * len(code)).from_buffer_copy(bytes(code))
+            ptr = ctypes.cast(buf, ctypes.c_void_p)
+            kernel32 = ctypes.windll.kernel32
+            old = ctypes.c_ulong(0)
+            if not kernel32.VirtualProtect(ptr, len(code), 0x40, ctypes.byref(old)):
+                return 0
+            func = ctypes.CFUNCTYPE(ctypes.c_uint)(ptr.value)
+            val = func()
+            kernel32.VirtualProtect(ptr, len(code), old.value, ctypes.byref(old))
+            return val
+
+        # Check AVX-VNNI (leaf 7, subleaf 1, EAX bit 4)
+        # First verify max subleaf >= 1
+        max_subleaf = _cpuid(7, 0, "eax") & 0xFFFFFFFF
+        if max_subleaf >= 1:
+            eax1 = _cpuid(7, 1, "eax")
+            if eax1 & (1 << 4):
+                return True
+
+        # Check AVX512-VNNI (leaf 7, subleaf 0, ECX bit 11)
+        ecx0 = _cpuid(7, 0, "ecx")
+        if ecx0 & (1 << 11):
+            return True
+
+        return False
+    except Exception:
+        return False
 
 
 def check_python():
@@ -153,8 +234,8 @@ def _find_compilers(verbose=False):
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
                      "-qopenmp", "-xCORE-AVX2"]
             simd_label = "AVX2"
-            # AVX-VNNI probe: older icpx may not support -mavxvnni
-            if _compiler_probe(icpx, "-mavxvnni"):
+            # AVX-VNNI: both compiler AND CPU must support it
+            if _compiler_probe(icpx, "-mavxvnni") and _cpu_has_vnni():
                 flags.append("-mavxvnni")
                 simd_label = "AVX2+VNNI"
             entries.append((icpx, flags, simd_label, False))
@@ -168,8 +249,8 @@ def _find_compilers(verbose=False):
         base = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         arch_flags, arch_name = _gcc_arch_flags("g++", verbose)
         simd_flags, simd_name = _detect_simd("g++")
-        # AVX-VNNI probe (GCC 9+/Clang 10+)
-        if _compiler_probe("g++", "-mavxvnni"):
+        # AVX-VNNI: both compiler (GCC 9+/Clang 10+) AND CPU must support it
+        if _compiler_probe("g++", "-mavxvnni") and _cpu_has_vnni():
             simd_flags.append("-mavxvnni")
             simd_name = simd_name + "+VNNI"
         entries.append(("g++", base + arch_flags + simd_flags, simd_name + arch_name, False))
