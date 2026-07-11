@@ -12,84 +12,124 @@ BUILD_DIR = os.path.join(BASE_DIR, "build")
 
 
 # ---- CPU feature detection (no compilation required) ----
+
+# Cache: read once, reused by both icpx and g++ VNNI checks
+_VNNI_CACHE = None
+
+
+def _cpuid_win(leaf, subleaf, ret_reg):
+    """Execute CPUID instruction on Windows x86-64 via ctypes.
+
+    Args:
+        leaf: CPUID leaf (EAX).
+        subleaf: CPUID subleaf (ECX).
+        ret_reg: Register to return: "eax", "ebx", "ecx", or "edx".
+
+    Returns the register value as unsigned int, or 0 on failure.
+    """
+    # Build x86-64 machine code
+    if subleaf:
+        code = bytearray([0xB9,
+                          subleaf & 0xFF, (subleaf >> 8) & 0xFF,
+                          (subleaf >> 16) & 0xFF, (subleaf >> 24) & 0xFF])
+    else:
+        code = bytearray([0x31, 0xC9])  # xor ecx, ecx
+    code += bytes([0xB8,
+                   leaf & 0xFF, (leaf >> 8) & 0xFF,
+                   (leaf >> 16) & 0xFF, (leaf >> 24) & 0xFF])
+    code += bytes([0x0F, 0xA2])  # cpuid
+    if ret_reg == "ecx":
+        code += bytes([0x89, 0xC8])  # mov eax, ecx
+    elif ret_reg == "ebx":
+        code += bytes([0x89, 0xD8])  # mov eax, ebx
+    elif ret_reg == "edx":
+        code += bytes([0x89, 0xD0])  # mov eax, edx
+    # else "eax": already in eax, nothing to do
+    code += bytes([0xC3])  # ret
+
+    kernel32 = ctypes.windll.kernel32
+    # CRITICAL: on 64-bit Python, set restype/argtypes to avoid pointer truncation
+    kernel32.VirtualAlloc.restype = ctypes.c_void_p
+    kernel32.VirtualFree.restype = ctypes.c_int
+    kernel32.VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong]
+
+    MEM_COMMIT = 0x1000
+    MEM_RESERVE = 0x2000
+    PAGE_EXECUTE_READWRITE = 0x40
+    MEM_RELEASE = 0x8000
+
+    ptr = kernel32.VirtualAlloc(0, len(code), MEM_COMMIT | MEM_RESERVE,
+                                PAGE_EXECUTE_READWRITE)
+    if not ptr:
+        return 0
+
+    ctypes.memmove(ptr, bytes(code), len(code))
+    func = ctypes.CFUNCTYPE(ctypes.c_uint)(ptr)
+    val = func()
+    kernel32.VirtualFree(ptr, 0, MEM_RELEASE)
+    return val
+
+
 def _cpu_has_vnni():
     """Check if host CPU supports AVX-VNNI.
 
     AVX-VNNI (VPDPBUSD with YMM/XMM): CPUID leaf 7, subleaf 1, EAX bit 4.
     AVX512-VNNI (VPDPBUSD with ZMM):  CPUID leaf 7, subleaf 0, ECX bit 11.
-    We check both — either one qualifies.
+    Either one qualifies.  Result is cached — safe to call multiple times.
     """
-    # Linux / Android / Termux: read /proc/cpuinfo
+    global _VNNI_CACHE
+    if _VNNI_CACHE is not None:
+        return _VNNI_CACHE
+
+    result = False
+
+    # Linux / Android / Termux / BSD: read /proc/cpuinfo
     if sys.platform != "win32" and sys.platform != "darwin":
         try:
             with open("/proc/cpuinfo") as f:
                 info = f.read().lower()
-                return "avxvnni" in info or "avx512_vnni" in info or "avx512vnni" in info
+                result = "avxvnni" in info or "avx512_vnni" in info or "avx512vnni" in info
         except Exception:
-            return False
+            result = False
 
-    # macOS: use sysctl
-    if sys.platform == "darwin":
+    # macOS: targeted sysctl queries (much faster than sysctl -a)
+    elif sys.platform == "darwin":
         try:
-            r = subprocess.run(["sysctl", "-a"], capture_output=True,
-                               text=True, timeout=5, encoding="utf-8", errors="replace")
-            info = r.stdout.lower()
-            return "avxvnni" in info or "avx512_vnni" in info or "avx512vnni" in info
+            for key in ("machdep.cpu.leaf7_features", "hw.optional.avx512vnni",
+                        "hw.optional.avxvnni"):
+                r = subprocess.run(["sysctl", "-n", key], capture_output=True,
+                                   text=True, timeout=5, encoding="utf-8", errors="replace")
+                if r.returncode == 0 and ("avxvnni" in r.stdout.lower() or
+                                           "avx512" in r.stdout.lower()):
+                    result = True
+                    break
         except Exception:
-            return False
+            result = False
 
-    # Windows: execute CPUID instruction via ctypes
-    try:
-        is_64 = platform.machine().endswith("64")
-        if not is_64:
-            return False
-
-        # Helper: run CPUID with given leaf/subleaf, return specified register
-        def _cpuid(leaf, subleaf, ret_reg):
-            code = bytearray()
-            if subleaf:
-                code += bytes([0xB9, subleaf, 0, 0, 0])  # mov ecx, subleaf
+    # Windows: CPUID via ctypes (x86-64 only)
+    else:
+        try:
+            machine = platform.machine().lower()
+            if machine not in ("amd64", "x86_64", "x64"):
+                result = False
             else:
-                code += bytes([0x31, 0xC9])               # xor ecx, ecx
-            code += bytes([0xB8, leaf & 0xFF, (leaf >> 8) & 0xFF, 0, 0])  # mov eax, leaf
-            code += bytes([0x0F, 0xA2])                   # cpuid
-            if ret_reg == "eax":
-                pass
-            elif ret_reg == "ecx":
-                code += bytes([0x89, 0xC8])               # mov eax, ecx
-            elif ret_reg == "ebx":
-                code += bytes([0x89, 0xD8])               # mov eax, ebx
-            else:
-                code += bytes([0x89, 0xD0])               # mov eax, edx
-            code += bytes([0xC3])                         # ret
+                # AVX-VNNI: leaf 7, subleaf 1, EAX bit 4
+                max_subleaf = _cpuid_win(7, 0, "eax") & 0xFFFFFFFF
+                if max_subleaf >= 1:
+                    eax1 = _cpuid_win(7, 1, "eax")
+                    if eax1 & (1 << 4):
+                        result = True
 
-            buf = (ctypes.c_char * len(code)).from_buffer_copy(bytes(code))
-            ptr = ctypes.cast(buf, ctypes.c_void_p)
-            kernel32 = ctypes.windll.kernel32
-            old = ctypes.c_ulong(0)
-            if not kernel32.VirtualProtect(ptr, len(code), 0x40, ctypes.byref(old)):
-                return 0
-            func = ctypes.CFUNCTYPE(ctypes.c_uint)(ptr.value)
-            val = func()
-            kernel32.VirtualProtect(ptr, len(code), old.value, ctypes.byref(old))
-            return val
+                # AVX512-VNNI: leaf 7, subleaf 0, ECX bit 11 (fallback)
+                if not result:
+                    ecx0 = _cpuid_win(7, 0, "ecx")
+                    if ecx0 & (1 << 11):
+                        result = True
+        except Exception:
+            result = False
 
-        # Check AVX-VNNI (leaf 7, subleaf 1, EAX bit 4)
-        # First verify max subleaf >= 1
-        max_subleaf = _cpuid(7, 0, "eax") & 0xFFFFFFFF
-        if max_subleaf >= 1:
-            eax1 = _cpuid(7, 1, "eax")
-            if eax1 & (1 << 4):
-                return True
-
-        # Check AVX512-VNNI (leaf 7, subleaf 0, ECX bit 11)
-        ecx0 = _cpuid(7, 0, "ecx")
-        if ecx0 & (1 << 11):
-            return True
-
-        return False
-    except Exception:
-        return False
+    _VNNI_CACHE = result
+    return result
 
 
 def check_python():
