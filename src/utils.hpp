@@ -189,26 +189,6 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
 }
 #endif
 
-// ===== NEON 稳定压缩查找表 (Issue #17 附件 E14) =====
-// 将 8 位 lane mask 映射为 vtbl1_u8 的 shuffle 索引和匹配计数。
-// constexpr 编译期计算，零运行时开销。
-#if PBB_HAS_NEON
-struct Compress8Table {
-  u8_t indexes[256][8];
-  u8_t counts[256];
-  constexpr Compress8Table() {
-    for (int mask = 0; mask < 256; mask++) {
-      int count = 0;
-      for (int lane = 0; lane < 8; lane++)
-        if (mask & (1 << lane)) indexes[mask][count++] = lane;
-      for (int lane = count; lane < 8; lane++) indexes[mask][lane] = 0xff;
-      counts[mask] = count;
-    }
-  }
-};
-static constexpr Compress8Table compress8_table{};
-#endif
-
 // ===== SIMD 过滤 + 稳定压缩 (Issue #17 方向二) =====
 // 将逐字节分支替换为 SIMD 比较 → 位掩码 → 只遍历匹配字节，
 // 消除数据依赖的分支预测失败。
@@ -284,53 +264,8 @@ static inline void simd_filter_skills(const u8_t* __restrict__ ual,
   }
 }
 
-#elif PBB_HAS_NEON
-// NEON: 8 字节比较 → vaddv_u8 位掩码 → vtbl1_u8 查表稳定压缩
-// Compress8Table 将 256 种 lane mask 映射为有序 shuffle 索引，
-// 消除逐字节分支预测失败。附件 E14 证明此路径在 ARM 上收益 +37%。
-static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
-                                           u8_t* __restrict__ name_base,
-                                           int& q_len, int max_count) {
-  const uint8x8_t lower = vdup_n_u8(89);
-  const uint8x8_t upper = vdup_n_u8(217);
-  const uint8x8_t low_bits = vdup_n_u8(63);
-  const uint8x8_t bit_weights = {1, 2, 4, 8, 16, 32, 64, 128};
-  for (int i = 0; i < 256 && q_len < max_count; i += 8) {
-    uint8x8_t data = vld1_u8(&ual[i]);
-    uint8x8_t selected = vand_u8(vcge_u8(data, lower), vclt_u8(data, upper));
-    int mask = vaddv_u8(vand_u8(selected, bit_weights));
-    if (mask) {
-      uint8x8_t compacted = vtbl1_u8(vand_u8(data, low_bits),
-                                      vld1_u8(compress8_table.indexes[mask]));
-      vst1_u8(name_base + q_len + 1, compacted);
-      q_len += compress8_table.counts[mask];
-    }
-  }
-  if (q_len > max_count) q_len = max_count;
-}
-
-static inline void simd_filter_skills(const u8_t* __restrict__ ual,
-                                       u8_t* __restrict__ name_base, int& q_len) {
-  const uint8x8_t high_bit = vdup_n_u8(0x80);
-  const uint8x8_t offset = vdup_n_u8(89);
-  const uint8x8_t low_bits = vdup_n_u8(63);
-  const uint8x8_t bit_weights = {1, 2, 4, 8, 16, 32, 64, 128};
-  const uint8x8_t zero = vdup_n_u8(0);
-  for (int i = 0; i < 256; i += 8) {
-    uint8x8_t data = vld1_u8(&ual[i]);
-    uint8x8_t selected = vceq_u8(vand_u8(data, high_bit), zero);
-    int mask = vaddv_u8(vand_u8(selected, bit_weights));
-    if (mask) {
-      uint8x8_t compacted = vtbl1_u8(vand_u8(vadd_u8(data, offset), low_bits),
-                                      vld1_u8(compress8_table.indexes[mask]));
-      vst1_u8(name_base + q_len + 1, compacted);
-      q_len += compress8_table.counts[mask];
-    }
-  }
-}
-
 #else
-// 标量回退: 无 SIMD 平台
+// NEON / 标量回退: 逐字节分支过滤
 static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
                                            u8_t* __restrict__ name_base,
                                            int& q_len, int max_count) {
