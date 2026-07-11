@@ -188,3 +188,96 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
   }
 }
 #endif
+
+// ===== SIMD 过滤 + 稳定压缩 (Issue #17 方向二) =====
+// 将逐字节分支替换为 SIMD 比较 → 位掩码 → 只遍历匹配字节，
+// 消除数据依赖的分支预测失败。
+
+// ---- 属性过滤: ual[i] ∈ [89, 217), 输出 ual[i] & 63 ----
+// 用在 finish_load() / loading_name() 的 SIMD 路径
+#if PBB_HAS_AVX512
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  for (int i = 0; i < 256 && q_len < max_count; i += 64) {
+    __m512i data = _mm512_loadu_si512((const __m512i*)&ual[i]);
+    __mmask64 ge = _mm512_cmp_epu8_mask(data, _mm512_set1_epi8(88), _MM_CMPINT_GT);
+    __mmask64 lt = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), data, _MM_CMPINT_GT); // 217 > data ≡ data < 217
+    __mmask64 mask = ge & lt;
+    while (mask && q_len < max_count) {
+      int idx = __builtin_ctzll(mask);
+      name_base[++q_len] = ual[i + idx] & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i += 64) {
+    __m512i data = _mm512_loadu_si512((const __m512i*)&ual[i]);
+    // high bit == 0 ≡ data < 0x80 (无符号)
+    __mmask64 mask = _mm512_cmp_epu8_mask(data, _mm512_set1_epi8(0x80), _MM_CMPINT_LT);
+    while (mask) {
+      int idx = __builtin_ctzll(mask);
+      name_base[++q_len] = (ual[i + idx] + 89) & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+#elif PBB_HAS_AVX2
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  const __m256i v88  = _mm256_set1_epi8(88); // subs(data, 88) != 0 ≡ data > 88 ≡ data >= 89
+  const __m256i v216 = _mm256_set1_epi8(216); // subs(data, 216) == 0 ≡ data <= 216 ≡ data < 217
+  const __m256i vzero = _mm256_setzero_si256();
+  for (int i = 0; i < 256 && q_len < max_count; i += 32) {
+    __m256i data = _mm256_loadu_si256((const __m256i*)&ual[i]);
+    // ual >= 89 (无符号): ual - 88 不下溢 → subs != 0, 取反 cmpeq (用 88 保证 89 也被匹配)
+    __m256i ge = _mm256_xor_si256(
+        _mm256_cmpeq_epi8(_mm256_subs_epu8(data, v88), vzero),
+        _mm256_set1_epi8(0xFF));
+    // ual < 217 (无符号): ual - 216 下溢 → subs == 0
+    __m256i lt = _mm256_cmpeq_epi8(_mm256_subs_epu8(data, v216), vzero);
+    unsigned mask = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge, lt));
+    while (mask && q_len < max_count) {
+      int idx = __builtin_ctz(mask);
+      name_base[++q_len] = ual[i + idx] & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i += 32) {
+    __m256i data = _mm256_loadu_si256((const __m256i*)&ual[i]);
+    // movemask 提取每个字节的高位; 取反后 bit=1 表示高位为 0 (匹配)
+    unsigned mask = (unsigned)~_mm256_movemask_epi8(data);
+    while (mask) {
+      int idx = __builtin_ctz(mask);
+      name_base[++q_len] = (ual[i + idx] + 89) & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
+#else
+// NEON: 暂保持标量 (ARM 分支预测好，且已有高效的展开标量路径)
+static inline void simd_filter_range_attr(const u8_t* __restrict__ ual,
+                                           u8_t* __restrict__ name_base,
+                                           int& q_len, int max_count) {
+  for (int i = 0; i < 256 && q_len < max_count; i++)
+    if (ual[i] >= 89 && ual[i] < 217)
+      name_base[++q_len] = ual[i] & 63;
+}
+
+static inline void simd_filter_skills(const u8_t* __restrict__ ual,
+                                       u8_t* __restrict__ name_base, int& q_len) {
+  for (int i = 0; i < 256; i++)
+    if ((ual[i] & 0x80) == 0)
+      name_base[++q_len] = (ual[i] + 89) & 63;
+}
+#endif

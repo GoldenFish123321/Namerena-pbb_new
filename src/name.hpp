@@ -126,9 +126,7 @@ struct alignas(64) Name {
   // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
   void finish_load() {
     simd_mul_add_dual(val, ual, ual_skills);
-    for (int i = 0; i < N && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
+    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
@@ -307,9 +305,7 @@ struct alignas(64) Name {
         std::swap(val[i], val[s]);
       }
     simd_mul_add(val, ual, 181, 160);
-    for (int i = 0; i < N && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
+    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD 过滤: 替换逐字节分支
     V = 0;
     V += median(name_base[10], name_base[11], name_base[12]);
     V += median(name_base[13], name_base[14], name_base[15]);
@@ -380,10 +376,7 @@ struct alignas(64) Name {
 #if PBB_HAS_SIMD
   void calc_skills(const char *name) {
     q_len = -1;
-    // 过滤: 高位为 0 的 ual_skills 值 → (val + 89) & 63
-    for (int i = 0; i < N; i++)
-      if ((ual_skills[i] & 0x80) == 0)
-        name_base[++q_len] = (ual_skills[i] + 89) & 63;
+    simd_filter_skills(ual_skills, name_base, q_len);  // SIMD: 替换逐字节高位检查
     u8_t *a = name_base + K;       // 技能值从 name_base[64] 开始
     for (int i = 0; i < skill_cnt; i++) skill[i] = i;
     memset(freq, 0, sizeof freq);
