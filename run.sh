@@ -80,6 +80,19 @@ if ! python3 -c "import venv" 2>/dev/null; then
     fi
 fi
 
+# ── python3-dev (Python.h for pybind11 C++ extension) ──
+_py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+_py_include=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('INCLUDEPY') or '')")
+if [ -z "$_py_include" ] || [ ! -f "$_py_include/Python.h" ]; then
+    echo "[run] Python.h not found (needed for C++ extension)."
+    if _confirm "Install python${_py_ver}-dev?"; then
+        # try version-specific first (e.g. python3.14-dev), fallback to generic
+        $_pkg "python${_py_ver}-dev" 2>/dev/null || $_pkg python3-dev 2>/dev/null || {
+            echo "[run] WARNING: failed to install python-dev, build may fail"
+        }
+    fi
+fi
+
 cd "$(dirname "$0")"
 
 # ── Intel oneAPI (自动加载环境) ──
