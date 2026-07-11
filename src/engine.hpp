@@ -501,12 +501,10 @@ inline int engine_main(int argc,char**argv){
     // Python 直接采信此行, 不再从文件重算 max、不再用墙钟反算 speed。
     // 格式: SUMMARY max_sum=.. max_xp=.. max_xd=.. found=.. count=.. elapsed=.. speed=..
     //   count=已处理名字总数, speed=名字/秒 (纯计算)
-    // 修复 (2026-07-12): processed 改用 tasks_done*CHUNK_SIZE (实际处理数),
-    //   避免中断时 SUMMARY 缺失导致 Python 回退路径用理论 range 算出荒谬速度。
     {
         auto t_end=std::chrono::steady_clock::now();
         double calc_sec=std::chrono::duration<double>(t_end-t_start).count();
-        unsigned long long processed=saturating_mul_u64(tasks_done.load(),CHUNK_SIZE);  // 实际已处理名字数
+        unsigned long long processed=ALL_totnum;  // 总名字数 (= (rR-rL)*np)
         double speed=calc_sec>0?(double)processed/calc_sec:0.0;
         fprintf(stderr,"SUMMARY max_sum=%d max_xp=%d max_xd=%d found=%d count=%llu elapsed=%.6f speed=%.6f\n",
             max_sum,max_xp,max_xd,total_found.load(),processed,calc_sec,speed);
