@@ -128,7 +128,7 @@ struct alignas(64) Name {
 #if PBB_HAS_NEON
     // NEON 融合路径: val → 变换(attr+skills) → 过滤 → vtbl1_u8 压缩
     // 消除 ual[] 中间数组的 256 字节 store+load 往返。
-    // ual_skills[] 仍保留供 calc_skills() 使用。
+    // ual_skills[] 必须全量计算 (calc_skills 依赖), 不可因 q_len 提前退出循环。
     {
       const uint8x8_t mul_181 = vdup_n_u8(181);
       const uint8x8_t add_160 = vdup_n_u8(160);
@@ -137,18 +137,20 @@ struct alignas(64) Name {
       const uint8x8_t upper   = vdup_n_u8(217);
       const uint8x8_t low6    = vdup_n_u8(63);
       const uint8x8_t bw      = {1, 2, 4, 8, 16, 32, 64, 128};
-      for (int i = 0; i < 256 && q_len < 30; i += 8) {
+      for (int i = 0; i < 256; i += 8) {
         uint8x8_t v = vld1_u8(&val[i]);
         uint8x8_t attr  = vadd_u8(vmul_u8(v, mul_181), add_160);
         uint8x8_t skill = vadd_u8(vmul_u8(v, mul_181), add_71);
-        vst1_u8(&ual_skills[i], skill);
-        uint8x8_t sel = vand_u8(vcge_u8(attr, lower), vclt_u8(attr, upper));
-        int mask = vaddv_u8(vand_u8(sel, bw));
-        if (mask) {
-          uint8x8_t comp = vtbl1_u8(vand_u8(attr, low6),
-                                     vld1_u8(compress8_table.indexes[mask]));
-          vst1_u8(name_base + q_len + 1, comp);
-          q_len += compress8_table.counts[mask];
+        vst1_u8(&ual_skills[i], skill);           // 始终全量写出
+        if (q_len < 30) {                         // 仅过滤可提前跳过
+          uint8x8_t sel = vand_u8(vcge_u8(attr, lower), vclt_u8(attr, upper));
+          int mask = vaddv_u8(vand_u8(sel, bw));
+          if (mask) {
+            uint8x8_t comp = vtbl1_u8(vand_u8(attr, low6),
+                                       vld1_u8(compress8_table.indexes[mask]));
+            vst1_u8(name_base + q_len + 1, comp);
+            q_len += compress8_table.counts[mask];
+          }
         }
       }
       if (q_len > 30) q_len = 30;
