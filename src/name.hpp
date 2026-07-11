@@ -125,8 +125,38 @@ struct alignas(64) Name {
 #if PBB_HAS_SIMD
   // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
   void finish_load() {
+#if PBB_HAS_NEON
+    // NEON 融合路径: val → 变换(attr+skills) → 过滤 → vtbl1_u8 压缩
+    // 消除 ual[] 中间数组的 256 字节 store+load 往返。
+    // ual_skills[] 仍保留供 calc_skills() 使用。
+    {
+      const uint8x8_t mul_181 = vdup_n_u8(181);
+      const uint8x8_t add_160 = vdup_n_u8(160);
+      const uint8x8_t add_71  = vdup_n_u8(71);
+      const uint8x8_t lower   = vdup_n_u8(89);
+      const uint8x8_t upper   = vdup_n_u8(217);
+      const uint8x8_t low6    = vdup_n_u8(63);
+      const uint8x8_t bw      = {1, 2, 4, 8, 16, 32, 64, 128};
+      for (int i = 0; i < 256 && q_len < 30; i += 8) {
+        uint8x8_t v = vld1_u8(&val[i]);
+        uint8x8_t attr  = vadd_u8(vmul_u8(v, mul_181), add_160);
+        uint8x8_t skill = vadd_u8(vmul_u8(v, mul_181), add_71);
+        vst1_u8(&ual_skills[i], skill);
+        uint8x8_t sel = vand_u8(vcge_u8(attr, lower), vclt_u8(attr, upper));
+        int mask = vaddv_u8(vand_u8(sel, bw));
+        if (mask) {
+          uint8x8_t comp = vtbl1_u8(vand_u8(attr, low6),
+                                     vld1_u8(compress8_table.indexes[mask]));
+          vst1_u8(name_base + q_len + 1, comp);
+          q_len += compress8_table.counts[mask];
+        }
+      }
+      if (q_len > 30) q_len = 30;
+    }
+#else
     simd_mul_add_dual(val, ual, ual_skills);
     simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
+#endif
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
@@ -304,8 +334,33 @@ struct alignas(64) Name {
         s += val[i];
         std::swap(val[i], val[s]);
       }
+#if PBB_HAS_NEON
+    // NEON 融合路径: val → 变换 → 过滤 → vtbl1_u8 压缩 (无 ual[] 中间数组)
+    {
+      const uint8x8_t mul_181 = vdup_n_u8(181);
+      const uint8x8_t add_160 = vdup_n_u8(160);
+      const uint8x8_t lower   = vdup_n_u8(89);
+      const uint8x8_t upper   = vdup_n_u8(217);
+      const uint8x8_t low6    = vdup_n_u8(63);
+      const uint8x8_t bw      = {1, 2, 4, 8, 16, 32, 64, 128};
+      for (int i = 0; i < 256 && q_len < 30; i += 8) {
+        uint8x8_t v = vld1_u8(&val[i]);
+        uint8x8_t attr = vadd_u8(vmul_u8(v, mul_181), add_160);
+        uint8x8_t sel = vand_u8(vcge_u8(attr, lower), vclt_u8(attr, upper));
+        int mask = vaddv_u8(vand_u8(sel, bw));
+        if (mask) {
+          uint8x8_t comp = vtbl1_u8(vand_u8(attr, low6),
+                                     vld1_u8(compress8_table.indexes[mask]));
+          vst1_u8(name_base + q_len + 1, comp);
+          q_len += compress8_table.counts[mask];
+        }
+      }
+      if (q_len > 30) q_len = 30;
+    }
+#else
     simd_mul_add(val, ual, 181, 160);
     simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD 过滤: 替换逐字节分支
+#endif
     V = 0;
     V += median(name_base[10], name_base[11], name_base[12]);
     V += median(name_base[13], name_base[14], name_base[15]);
