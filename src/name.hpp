@@ -51,6 +51,7 @@ struct alignas(64) Name {
   int seed;                         // 种子 (未使用, 保留)
   int PRELEN;                       // load_prefix 预处理的名字字节数
   int NAMELEN;                      // 名字总长度
+  bool _ksa_done = false;           // 内部: load_name_pair 已做完 KSA 时跳过重做
 
   // ===== m(): RC4 PRGA 单步 =====
   // 标准 RC4: i++, j = (j + S[i]), swap(S[i], S[j]), 输出 S[(S[i]+S[j]) & 255]
@@ -122,50 +123,81 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  void load_name(const char *name, int name_len_hint = 0) {
-    q_len = -1;
-    u8_t s = s_pre;
-    int _NAMELEN = name_len_hint ? name_len_hint : NAMELEN;
-    // 从 load_prefix 保存的状态恢复 (或 fallback 到 val_base2)
-    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
-    // 第一遍 KSA
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      s += name[j] + val[i];
-      std::swap(val[i], val[s]);
-      if (j == _NAMELEN)
-        j = -1;
-    }
-    // 第二遍 KSA
-    for (int i = s = 0, j = _NAMELEN; i < N; i++, j++) {
-      s += name[j] + val[i];
-      std::swap(val[i], val[s]);
-      if (j == _NAMELEN)
-        j = -1;
-    }
-    // SIMD 并行计算属性 ual 和技能 ual
+  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
+  void finish_load() {
     simd_mul_add_dual(val, ual, ual_skills);
-    // 过滤: ual ∈ [89, 217) → 保留低 6 位到 name_base
     for (int i = 0; i < N && q_len < 30; i++)
       if (ual[i] >= 89 && ual[i] < 217)
         name_base[++q_len] = ual[i] & 63;
-    // === V 值计算 (三级早退) ===
     V = 0;
-    // 第 1 级: 位置 28-30
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
-    // 第 2 级: 位置 13-18, 25-27
     V += median(name_base[13], name_base[14], name_base[15]);
     V += median(name_base[16], name_base[17], name_base[18]);
     V += median(name_base[25], name_base[26], name_base[27]);
     if (V < 165) return;
-    // 第 3 级: 位置 10-12, 19-24
     V += median(name_base[10], name_base[11], name_base[12]);
     V += median(name_base[19], name_base[20], name_base[21]);
     V += median(name_base[22], name_base[23], name_base[24]);
     if (V < 250) return;
-    // 第 4 级: 排序 + HP 加成
     sort10(name_base);
     V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+  }
+
+  void load_name(const char *name, int name_len_hint = 0) {
+    q_len = -1;
+    if (!_ksa_done) {
+      u8_t s = s_pre;
+      int _NAMELEN = name_len_hint ? name_len_hint : NAMELEN;
+      memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
+      for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+        s += name[j] + val[i];
+        std::swap(val[i], val[s]);
+        if (j == _NAMELEN) j = -1;
+      }
+      for (int i = s = 0, j = _NAMELEN; i < N; i++, j++) {
+        s += name[j] + val[i];
+        std::swap(val[i], val[s]);
+        if (j == _NAMELEN) j = -1;
+      }
+    }
+    _ksa_done = false;
+    finish_load();
+  }
+
+  // ===== load_name_pair(): 双候选交错 RC4 KSA (Issue #17 方向一) =====
+  // 同时推进两条独立 RC4 置换链, 利用乱序 CPU 的 ILP 隐藏 load-use 延迟。
+  // 在 swap 粒度交错——而非 ENC 编码级——直接消除 load_name 内部的瓶颈。
+  // 前置: this 和 other 已通过 load_prefix 设置相同的前缀状态。
+  // 完成后 _ksa_done 置为 true, 后续 load_name() 跳过 KSA 直接 finish_load()。
+  void load_name_pair(const char *name_a, const char *name_b, int name_len, Name& other) {
+    q_len = -1;
+    other.q_len = -1;
+    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
+    memcpy(other.val, other.prefix_loaded ? other.saved_val : other.val_base2, sizeof other.val);
+    u8_t s_a = s_pre, s_b = s_pre;
+
+    // 第一遍 KSA — 交错推进两条独立置换链 (共享 j, 等长名字)
+    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+      s_a += name_a[j] + val[i];
+      std::swap(val[i], val[s_a]);
+      s_b += name_b[j] + other.val[i];
+      std::swap(other.val[i], other.val[s_b]);
+      if (j == name_len) j = -1;
+    }
+
+    // 第二遍 KSA — 交错推进, s 各自从 0 开始
+    s_a = 0; s_b = 0;
+    for (int i = 0, j = name_len; i < N; i++, j++) {
+      s_a += name_a[j] + val[i];
+      std::swap(val[i], val[s_a]);
+      s_b += name_b[j] + other.val[i];
+      std::swap(other.val[i], other.val[s_b]);
+      if (j == name_len) j = -1;
+    }
+
+    _ksa_done = true;
+    other._ksa_done = true;
   }
 #else
   // ===== load_name(): 标量回退路径 =====
@@ -173,18 +205,22 @@ struct alignas(64) Name {
   // 分批处理前 96 字节和后 160 字节以减少不必要的计算。
   void load_name(const char *name, int name_len_hint = 0) {
     q_len = -1;
-    u8_t s = s_pre;
-    memcpy(val, val_base2, sizeof val);
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      s += name[j] + val[i];
-      std::swap(val[i], val[s]);
-      if (j == NAMELEN) j = -1;
+    (void)name_len_hint;
+    if (!_ksa_done) {
+      u8_t s = s_pre;
+      memcpy(val, val_base2, sizeof val);
+      for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+        s += name[j] + val[i];
+        std::swap(val[i], val[s]);
+        if (j == NAMELEN) j = -1;
+      }
+      for (int i = s = 0, j = NAMELEN; i < N; i++, j++) {
+        s += name[j] + val[i];
+        std::swap(val[i], val[s]);
+        if (j == NAMELEN) j = -1;
+      }
     }
-    for (int i = s = 0, j = NAMELEN; i < N; i++, j++) {
-      s += name[j] + val[i];
-      std::swap(val[i], val[s]);
-      if (j == NAMELEN) j = -1;
-    }
+    _ksa_done = false;
     // 标量 ual 计算: val * 181 + 160 (前 96 字节)
     for (int i = 0; i < 96; i += 8) {
       ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
@@ -221,6 +257,35 @@ struct alignas(64) Name {
     if (V < 250) return;
     sort10(name_base);
     V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+  }
+
+  // ===== load_name_pair(): 标量回退 — 双候选交错 KSA =====
+  void load_name_pair(const char *name_a, const char *name_b, int name_len, Name& other) {
+    q_len = -1;
+    other.q_len = -1;
+    memcpy(val, val_base2, sizeof val);
+    memcpy(other.val, other.val_base2, sizeof other.val);
+    u8_t s_a = s_pre, s_b = s_pre;
+
+    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+      s_a += name_a[j] + val[i];
+      std::swap(val[i], val[s_a]);
+      s_b += name_b[j] + other.val[i];
+      std::swap(other.val[i], other.val[s_b]);
+      if (j == name_len) j = -1;
+    }
+
+    s_a = 0; s_b = 0;
+    for (int i = 0, j = name_len; i < N; i++, j++) {
+      s_a += name_a[j] + val[i];
+      std::swap(val[i], val[s_a]);
+      s_b += name_b[j] + other.val[i];
+      std::swap(other.val[i], other.val[s_b]);
+      if (j == name_len) j = -1;
+    }
+
+    _ksa_done = true;
+    other._ksa_done = true;
   }
 #endif
 

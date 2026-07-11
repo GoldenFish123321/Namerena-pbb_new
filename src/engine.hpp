@@ -282,7 +282,12 @@ inline int engine_main(int argc,char**argv){
     // 动态线程数: worker id >= target_threads 时该线程睡眠, 不取任务
     std::atomic<int> target_threads{n_threads};
 
-    auto cons=[&](int cid){(void)cid;Name name;memcpy(name.val_base,name_init.val_base,sizeof(name.val_base));TaskData t;
+    auto cons=[&](int cid){(void)cid;
+        Name name_a,name_b;
+        memcpy(name_a.val_base,name_init.val_base,sizeof(name_a.val_base));
+        memcpy(name_b.val_base,name_init.val_base,sizeof(name_b.val_base));
+        char buf_b[512];
+        TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
         // 编码宏: 全内联, 编译器在 scl==4 分支将 memcpy(...,4) 优化为单条 mov
@@ -305,45 +310,79 @@ inline int engine_main(int argc,char**argv){
                 if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
-        // ---- 编码 helper: 顺序进位 (mode 1/2/4 共用) ----
-        auto consume_seq=[&](char* buf,int nlen,Name& name,int epre,int evar,uint64_t L,uint64_t R){
-            for(uint64_t i=L;i<R;i++){uint64_t now=i;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf+pos,ci);now/=clen;}
-                process_one(buf,nlen,score_full(buf,nlen,name));}
+        // ---- 编码 helper: 顺序进位 — 双候选交错 KSA (Issue #17) ----
+        auto consume_seq=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
+                              int epre,int evar,uint64_t L,uint64_t R){
+            for(uint64_t i=L;i+1<R;i+=2){
+                uint64_t now=i;
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
+                now=i+1;
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_b+pos,ci);now/=clen;}
+                na.load_name_pair(buf_a,buf_b,nlen,nb);
+                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
+                process_one(buf_b,nlen,score_full(buf_b,nlen,nb));
+            }
+            if((R-L)%2==1){
+                uint64_t i=R-1,now=i;
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
+                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
+            }
         };
 
-        // ---- 编码 helper: 随机逐位 (mode 3 专用) ----
-        auto consume_rand=[&](char* buf,int nlen,Name& name,int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
-            for(uint64_t i=L;i<R;i++){
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
-                process_one(buf,nlen,score_full(buf,nlen,name));}
+        // ---- 编码 helper: 随机逐位 — 双候选交错 KSA (Issue #17) ----
+        auto consume_rand=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
+                               int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            for(uint64_t i=L;i+1<R;i+=2){
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf_a+pos,ci);}
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf_b+pos,ci);}
+                na.load_name_pair(buf_a,buf_b,nlen,nb);
+                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
+                process_one(buf_b,nlen,score_full(buf_b,nlen,nb));
+            }
+            if((R-L)%2==1){
+                uint64_t i=R-1;
+                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=rng()%clen;ENC(buf_a+pos,ci);}
+                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
+            }
         };
 
-        // ---- mode 1: 顺序区间, 前缀/后缀全组合, 进位检测跳过共同前缀 ----
-        auto consume_mode1=[&](char* buf,int nlen,Name& name,int plen,int vlen,uint64_t L,uint64_t R){
-            name.PRELEN=plen;name.load_prefix(buf,nlen);
+        // ---- mode 1: 顺序区间 — 双候选交错 KSA (Issue #17) ----
+        auto consume_mode1=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,int plen,int vlen,uint64_t L,uint64_t R){
+            na.PRELEN=plen;na.load_prefix(buf_a,nlen);
+            nb.PRELEN=plen;nb.load_prefix(buf_a,nlen);
             uint8_t dl[16],dr[16];uint64_t now;
             now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
             now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
             int up=0;while(up<vlen&&dl[up]==dr[up])up++;
-            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf+plen+d*scl,ci);now/=clen;}
+            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf_a+plen+d*scl,ci);now/=clen;}
+            now=L+1;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf_b+plen+d*scl,ci);now/=clen;}
             int epre=plen+up*scl,evar=vlen-up;
-            consume_seq(buf,nlen,name,epre,evar,L,R);
+            consume_seq(buf_a,nlen,na,buf_b,nb,epre,evar,L,R);
         };
 
-        // ---- mode 2/4: 随机额外字符 + 随机区间 + 顺序进位 ----
-        auto consume_mode24=[&](char* buf,int nlen,Name& name,int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
-            int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
-            int epre=plen+extra*scl,evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
+        // ---- mode 2/4: 随机额外字符 + 随机区间 — 双候选交错 KSA (Issue #17) ----
+        auto consume_mode24=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
+                                 int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf_a+pos,ci);}
+            memcpy(buf_b,buf_a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(buf_a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(buf_b,nlen);
             L=rng()%random_range_max;R=L+CHUNK_SIZE;
-            consume_seq(buf,nlen,name,epre,evar,L,R);
+            consume_seq(buf_a,nlen,na,buf_b,nb,epre,evar,L,R);
         };
 
-        // ---- mode 3: 随机额外字符 + 随机逐位编码 ----
-        auto consume_mode3=[&](char* buf,int nlen,Name& name,int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
-            int extra=vlen-varlen_task;if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf+pos,ci);}
-            int epre=plen+extra*scl,evar=varlen_task;name.PRELEN=epre;name.load_prefix(buf,nlen);
-            consume_rand(buf,nlen,name,epre,evar,L,R,rng);
+        // ---- mode 3: 随机额外字符 + 随机逐位 — 双候选交错 KSA (Issue #17) ----
+        auto consume_mode3=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
+                                int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(buf_a+pos,ci);}
+            memcpy(buf_b,buf_a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(buf_a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(buf_b,nlen);
+            consume_rand(buf_a,nlen,na,buf_b,nb,epre,evar,L,R,rng);
         };
 
         while(true){
@@ -364,10 +403,11 @@ inline int engine_main(int argc,char**argv){
             buf[nlen]=0;  // 修复: load_prefix/load_name 循环第一轮读 name[nlen], 与 pbb_all.cpp 全局零初始化对齐
             uint64_t L=t.L,R=t.R;
 
-            // 模式分发: 各模式独立的编码逻辑
-            if(mode==1)      consume_mode1(buf,nlen,name,plen,vlen,L,R);
-            else if(mode==3) consume_mode3(buf,nlen,name,plen,L,R,rng);
-            else             consume_mode24(buf,nlen,name,plen,L,R,rng);  // mode 2/4
+            // 模式分发: 各模式独立的编码逻辑 (双候选交错 KSA)
+            memcpy(buf_b,buf,nlen+1);
+            if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,plen,vlen,L,R);
+            else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,plen,L,R,rng);
+            else             consume_mode24(buf,nlen,name_a,buf_b,name_b,plen,L,R,rng);  // mode 2/4
 
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====
             {
