@@ -306,8 +306,26 @@ def _find_compilers(verbose=False):
 
 def _py_include():
     inc = sysconfig.get_config_var("INCLUDEPY")
-    if inc: return [inc]
-    return [os.path.join(sys.prefix, "include")]
+    if inc:
+        path = os.path.join(inc, "Python.h")
+        if os.path.exists(path):
+            return [inc]
+    # Fallback: try sys.prefix/include
+    fallback = os.path.join(sys.prefix, "include")
+    if os.path.exists(os.path.join(fallback, "Python.h")):
+        return [fallback]
+    # Neither worked — give clear instructions
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    print(f"[build] ERROR: Python.h not found at INCLUDEPY or sys.prefix/include",
+          file=sys.stderr)
+    print(f"[build] Install Python dev headers:", file=sys.stderr)
+    if sys.platform == "linux":
+        print(f"  sudo apt install python{ver}-dev", file=sys.stderr)
+    elif sys.platform == "darwin":
+        print(f"  brew install python@{ver}", file=sys.stderr)
+    else:
+        print(f"  Reinstall Python with 'Development headers' checked", file=sys.stderr)
+    return [fallback]  # let the compiler fail with its own error
 
 
 def _py_link_flags():
@@ -479,7 +497,7 @@ def _compile_pbb_core(verbose=False):
     includes = [os.path.join(BASE_DIR, "src"), pybind11.get_include()] + _py_include()
     link = _py_link_flags()
 
-    last_err = ""
+    all_errors = []  # accumulate all compiler errors, not just the last
     for name, flags, simd_name, is_msvc in compilers:
         # MinGW g++ on Windows: static link runtime to avoid missing DLL errors
         extra_link = link[:]
@@ -498,10 +516,13 @@ def _compile_pbb_core(verbose=False):
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return  # success
-        last_err = r.stderr
-        print(f"[build] {name} failed, trying next compiler ...", file=sys.stderr)
+        err_preview = r.stderr.strip()[-500:]
+        print(f"[build] {os.path.basename(str(name))} failed: {err_preview[:200]}", file=sys.stderr)
+        all_errors.append((os.path.basename(str(name)), r.stderr.strip()))
 
-    print(f"[build] All compilers failed:\n{last_err[-1000:]}", file=sys.stderr)
+    print(f"[build] All compilers failed ({len(all_errors)} tried):", file=sys.stderr)
+    for compiler_name, err in all_errors:
+        print(f"[build] --- {compiler_name} ---\n{err[-800:]}\n", file=sys.stderr)
     sys.exit(1)
 
 
@@ -517,7 +538,7 @@ def _compile_engine(verbose=False):
     out = _engine_bin()
     includes = [os.path.join(BASE_DIR, "src")]
 
-    last_err = ""
+    all_errors = []
     for name, flags, simd_name, is_msvc in compilers:
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
@@ -532,10 +553,13 @@ def _compile_engine(verbose=False):
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return
-        last_err = r.stderr
-        print(f"[build] {name} failed, trying next compiler ...", file=sys.stderr)
+        err_preview = r.stderr.strip()[-500:]
+        print(f"[build] {os.path.basename(str(name))} failed: {err_preview[:200]}", file=sys.stderr)
+        all_errors.append((os.path.basename(str(name)), r.stderr.strip()))
 
-    print(f"[build] All compilers failed:\n{last_err[-1000:]}", file=sys.stderr)
+    print(f"[build] All compilers failed ({len(all_errors)} tried):", file=sys.stderr)
+    for compiler_name, err in all_errors:
+        print(f"[build] --- {compiler_name} ---\n{err[-800:]}\n", file=sys.stderr)
     sys.exit(1)
 
 
