@@ -20,6 +20,14 @@
   #define PBB_HAS_AVX512 0
 #endif
 
+// AVX-VNNI: -mavxvnni (Intel) 或 -mavx512vnni (AVX-512 VNNI)
+// VPDPBUSD: int8 × uint8 → int32 点积累加, 加速量化推理
+#if defined(__AVXVNNI__) || defined(__AVX512VNNI__)
+  #define PBB_HAS_VNNI 1
+#else
+  #define PBB_HAS_VNNI 0
+#endif
+
 // ARM NEON: aarch64 强制特性
 #if defined(__aarch64__) || defined(__ARM_NEON)
   #include <arm_neon.h>
@@ -33,9 +41,17 @@
 
 // SIMD 名称字符串 (编译期确定)
 #if PBB_HAS_AVX512
-  #define PBB_SIMD_NAME "AVX-512"
+  #if PBB_HAS_VNNI
+    #define PBB_SIMD_NAME "AVX-512+VNNI"
+  #else
+    #define PBB_SIMD_NAME "AVX-512"
+  #endif
 #elif PBB_HAS_AVX2
-  #define PBB_SIMD_NAME "AVX2"
+  #if PBB_HAS_VNNI
+    #define PBB_SIMD_NAME "AVX2+VNNI"
+  #else
+    #define PBB_SIMD_NAME "AVX2"
+  #endif
 #elif PBB_HAS_NEON
   #define PBB_SIMD_NAME "NEON"
 #else

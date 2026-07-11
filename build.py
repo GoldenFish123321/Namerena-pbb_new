@@ -149,10 +149,11 @@ def _find_compilers(verbose=False):
         if is_win:
             # -xHost still crashes on Arrow Lake (LLVM bug in bridge.cpp).
             # -xCORE-AVX2 is the only stable choice for both pbb_core and engine.
+            # -mavxvnni enables AVX-VNNI (VPDPBUSD) for int8 dot-product acceleration.
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xCORE-AVX2"]
-            entries.append((icpx, flags, "AVX2", False))
+                     "-qopenmp", "-xCORE-AVX2", "-mavxvnni"]
+            entries.append((icpx, flags, "AVX2+VNNI", False))
         else:
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
@@ -163,6 +164,10 @@ def _find_compilers(verbose=False):
         base = ["-std=c++17", "-O3", "-funroll-loops", "-ffast-math"]
         arch_flags, arch_name = _gcc_arch_flags("g++", verbose)
         simd_flags, simd_name = _detect_simd("g++")
+        # AVX-VNNI probe (GCC 9+/Clang 10+)
+        if _compiler_probe("g++", "-mavxvnni"):
+            simd_flags.append("-mavxvnni")
+            simd_name = simd_name + "+VNNI"
         entries.append(("g++", base + arch_flags + simd_flags, simd_name + arch_name, False))
 
     if cl:
