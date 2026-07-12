@@ -351,12 +351,67 @@ constexpr PolyEntry POLY_TABLE[1034] = {
 // ===== hanxu_Poly: 多项式特征扩展 (预计算表版) =====
 // 用编译期常量 POLY_TABLE 替代运行时反向追踪。
 // 1034 次查表 + 直接计算, 消除 ~45000 次循环迭代。
-inline void hanxu_Poly(double *xp, const double *x) {
+inline void hanxu_Poly(float *xp, const float *x) {
   for (int y = 0; y < 1034; y++) {
     auto& e = POLY_TABLE[y];
     xp[y] = e.is_pair ? x[e.p] * x[e.p + e.q] : x[e.q];
   }
 }
+
+// ===== simd_dot_f32: SIMD 加速浮点点积 =====
+// 按指令集层级选择最佳实现: AVX2 (2×8-wide FMA) > NEON (2×4-wide FMA)
+#if PBB_HAS_AVX2
+static inline float simd_dot_f32(const float* a, const float* b, int n) {
+    __m256 sum0 = _mm256_setzero_ps(), sum1 = _mm256_setzero_ps();
+    int i = 0;
+    // 主循环: 每次处理 16 个 float (2 累加器 × 8-wide FMA)
+    for (; i + 16 <= n; i += 16) {
+        sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(&a[i]),     _mm256_loadu_ps(&b[i]),     sum0);
+        sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(&a[i + 8]), _mm256_loadu_ps(&b[i + 8]), sum1);
+    }
+    // 尾块: 8-wide
+    for (; i + 8 <= n; i += 8)
+        sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(&a[i]), _mm256_loadu_ps(&b[i]), sum0);
+    sum0 = _mm256_add_ps(sum0, sum1);
+    // 水平求和
+    __m128 lo = _mm256_castps256_ps128(sum0);
+    __m128 hi = _mm256_extractf128_ps(sum0, 1);
+    __m128 s = _mm_add_ps(lo, hi);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    float r = _mm_cvtss_f32(s);
+    // 标量尾块 (<8)
+    for (; i < n; i++) r += a[i] * b[i];
+    return r;
+}
+#elif PBB_HAS_NEON
+static inline float simd_dot_f32(const float* a, const float* b, int n) {
+    float32x4_t sum0 = vdupq_n_f32(0), sum1 = vdupq_n_f32(0);
+    int i = 0;
+    // 主循环: 每次处理 8 个 float (2 累加器 × 4-wide FMA)
+    for (; i + 8 <= n; i += 8) {
+        sum0 = vfmaq_f32(sum0, vld1q_f32(&a[i]),     vld1q_f32(&b[i]));
+        sum1 = vfmaq_f32(sum1, vld1q_f32(&a[i + 4]), vld1q_f32(&b[i + 4]));
+    }
+    // 尾块: 4-wide
+    for (; i + 4 <= n; i += 4)
+        sum0 = vfmaq_f32(sum0, vld1q_f32(&a[i]), vld1q_f32(&b[i]));
+    sum0 = vaddq_f32(sum0, sum1);
+    // 水平求和 (4 floats → 1 float)
+    float32x2_t s2 = vadd_f32(vget_low_f32(sum0), vget_high_f32(sum0));
+    s2 = vpadd_f32(s2, s2);
+    float r = vget_lane_f32(s2, 0);
+    // 标量尾块 (<4)
+    for (; i < n; i++) r += a[i] * b[i];
+    return r;
+}
+#else
+static inline float simd_dot_f32(const float* a, const float* b, int n) {
+    float r = 0;
+    for (int i = 0; i < n; i++) r += a[i] * b[i];
+    return r;
+}
+#endif
 
 // ===== score_full: 完整评分流水线 =====
 // 前置条件: name_obj 必须先调用 load_team() 和 load_prefix()
@@ -446,7 +501,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   // ---- Step 5: 构建 44 维特征向量 xp_x ----
   // 结构: xp_x[0] = HP, xp_x[1..7] = 属性0-6, xp_x[8..42] = 技能0-34频次
   //       xp_x[43] = 暗影加成 (Step 6 填充)
-  double xp_x[44] = {};
+  float xp_x[44] = {};
   for (int j = 0; j < 7; j++) {
     prop[j] += 36;                 // 属性标准化 (+36 偏移)
     result.props[j] = prop[j];
@@ -473,7 +528,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   // 用 loading_name (独立 KSA) 重新评分，计算 shadow_bonus。
   // 公式: shadow_sum = HP/3 + Σ prop[0..6] - prop[6]*3
   //        shadowi = (shadow_sum - 210) * xp_x[32] / 100
-  double shadow_bonus = 0;
+  float shadow_bonus = 0;
   if (xp_x[32] > 0) {
     char shadow_name[260];
     memcpy(shadow_name, name, name_len);
@@ -511,20 +566,16 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   if (xp_x[42] > 0) xp_x[42] += 20;
 
   // ---- Step 7: 多项式扩展 + 模型评分 ----
-  double xp_array[1034];
+  float xp_array[1034];
   hanxu_Poly(xp_array, xp_x);
 
-  // XP 评分: bias + Σ feature_i * weight_i
-  float score = MODEL[0];
-  for (int i = 0; i < 1034; i++)
-    score += xp_array[i] * MODEL[i + 1];
+  // XP 评分: bias + SIMD 点积
+  float score = MODEL[0] + simd_dot_f32(xp_array, &MODEL[1], 1034);
 
   // XD 评分: 仅当 XP >= 4300 (基本合格) 时计算
   float scoreQD = 0;
   if (score >= 4300) {
-    scoreQD = MODELQD[0];
-    for (int i = 0; i < 1034; i++)
-      scoreQD += xp_array[i] * MODELQD[i + 1];
+    scoreQD = MODELQD[0] + simd_dot_f32(xp_array, &MODELQD[1], 1034);
   }
 
   result.xp = (int)score;
