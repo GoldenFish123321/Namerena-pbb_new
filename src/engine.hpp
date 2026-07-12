@@ -30,7 +30,7 @@
 #include <cstdlib>
 #include <limits>
 
-#define MAX_QUEUE_LEN 64       // 任务队列容量 (增大以减少 producer 阻塞)
+#define MAX_QUEUE_LEN 4        // 任务队列容量
 // ---- 两层并行术语 (第一性原理: f(i) 无依赖, 切 i 空间) ----
 //   chunk: 引擎内部线程级切分单位 (本文件), 生产者按 CHUNK_SIZE 切 [rL,rR) 喂给消费者线程
 //   task : 分布式级切分单位 (服务端), 服务端按更大粒度切总 range 下发给各客户端
@@ -312,19 +312,8 @@ inline int engine_main(int argc,char**argv){
         TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
-        // 每线程输出缓冲: 消除逐次 fprintf+fflush 的锁竞争 (P1)
-        std::string out_buf; out_buf.reserve(65536);
-        std::string blue_buf; blue_buf.reserve(16384);
         // 编码宏: 全内联, 编译器在 scl==4 分支将 memcpy(...,4) 优化为单条 mov
         #define ENC(dst,ci) do{const char*_s=cb+(ci)*scl;if(scl==4)memcpy((dst),_s,4);else if(scl==1)*(dst)=*_s;else if(scl==2)memcpy((dst),_s,2);else if(scl==3)memcpy((dst),_s,3);else memcpy((dst),_s,scl);}while(0)
-
-        // ---- chunk 结束: 批量刷缓冲到文件 (一次加锁) ----
-        auto flush_buffers=[&](){
-            if(out_buf.empty()&&blue_buf.empty())return;
-            std::lock_guard lk(out_mtx);
-            if(!out_buf.empty()){fwrite(out_buf.data(),1,out_buf.size(),fp);out_buf.clear();}
-            if(!blue_buf.empty()&&fp_blue){fwrite(blue_buf.data(),1,blue_buf.size(),fp_blue);blue_buf.clear();}
-        };
 
         // ---- 公共 helper: 评分 + blue 判定 (四种模式共享, 消除重复) ----
         auto process_one=[&](const char* buf,int nlen,const ScoreResult& r){
@@ -333,15 +322,14 @@ inline int engine_main(int argc,char**argv){
             if(r.sum>local_max_sum)local_max_sum=r.sum;
             if(r.xp>local_max_xp)local_max_xp=r.xp;
             if(r.xd>local_max_xd)local_max_xd=r.xd;
-            if(r.xp>=emin||r.xd>=xdm){local_found++;
-                char line[640];int wr;
-                if(output_xp)wr=snprintf(line,sizeof(line),"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
-                else wr=snprintf(line,sizeof(line),"%.*s@%s\n",nlen,buf,team.c_str());
-                if(wr>0)out_buf.append(line,wr);}
+            if(r.xp>=emin||r.xd>=xdm){std::lock_guard lk(out_mtx);local_found++;
+                if(output_xp)fprintf(fp,"%.*s@%s %d %d\n",nlen,buf,team.c_str(),r.xp,r.xd);
+                else fprintf(fp,"%.*s@%s\n",nlen,buf,team.c_str());
+                fflush(fp);}
             if(collect_mode>=1&&fp_blue){int sum=r.sum,raw_hp=r.props[7]-36,hl=*std::min_element(r.props,r.props+7);bool blue=false;
                 if(collect_mode==1){if(sum>=777||(sum*3-raw_hp)>=2000||(raw_hp==398&&sum>=741)||(hl>=93))blue=true;}
                 else{if(sum>=c_8v||(sum-raw_hp/3)>=c_7v||(raw_hp==398&&sum>=c_hp)||(hl>=c_hl))blue=true;}
-                if(blue){char line[640];int wr=snprintf(line,sizeof(line),"%.*s@%s\n",nlen,buf,team.c_str());if(wr>0)blue_buf.append(line,wr);}}
+                if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
         // ---- 编码 helper: 顺序进位 — 多候选交错 KSA (Issue #17 扩展) ----
@@ -629,9 +617,6 @@ inline int engine_main(int argc,char**argv){
             else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,plen,L,R,rng);
             else             consume_mode24(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,plen,L,R,rng);
 #endif
-
-            // P1: chunk 结束时批量刷缓冲到文件 (一次加锁, 消除逐行 fflush 竞争)
-            flush_buffers();
 
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====
             {
