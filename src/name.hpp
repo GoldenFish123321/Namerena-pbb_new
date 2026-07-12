@@ -123,10 +123,8 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
-  void finish_load() {
-    simd_mul_add_dual(val, ual, ual_skills);
-    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
+  // ===== finish_V(): 从 name_base 计算 V 值 (纯标量, 供 finish_load 复用) =====
+  void finish_V() {
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
@@ -140,6 +138,13 @@ struct alignas(64) Name {
     if (V < 250) return;
     sort10(name_base);
     V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+  }
+
+  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
+  void finish_load() {
+    simd_mul_add_dual(val, ual, ual_skills);
+    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
+    finish_V();
   }
 
   void load_name(const char *name, int name_len_hint = 0) {
@@ -244,6 +249,56 @@ struct alignas(64) Name {
       sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
       sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
       sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      if (j == nlen) j = -1;
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
+  }
+
+  // ===== load_name_quad_shared_key(): 共享 key load 四候选交错 KSA (Issue #17 建议四) =====
+  // 顺序枚举时 4 候选只在最低位 scl 字节不同，其余字节完全一致。
+  // vary_start = nlen - scl，对该范围外的字节只 load 一次广播给 4 条 KSA 链。
+  // 前置条件: 4 候选无进位 (guard: L%clen+3<clen)，否则字节差异不止最低位。
+  void load_name_quad_shared_key(const char *a, const char *b, const char *c, const char *d,
+                                  int nlen, int vary_start, Name& ob, Name& oc, Name& od) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
+    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
+    memcpy(ob.val, ob.prefix_loaded ? ob.saved_val : ob.val_base2, sizeof ob.val);
+    memcpy(oc.val, oc.prefix_loaded ? oc.saved_val : oc.val_base2, sizeof oc.val);
+    memcpy(od.val, od.prefix_loaded ? od.saved_val : od.val_base2, sizeof od.val);
+    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre;
+    // 第一遍 KSA
+    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+      if (j >= vary_start) {
+        // 变化字节: 各自独立 load
+        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      } else {
+        // 公共字节: 只 load a[j]，广播给 4 条链
+        u8_t kb = a[j];
+        sa += kb + val[i]; std::swap(val[i], val[sa]);
+        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      }
+      if (j == nlen) j = -1;
+    }
+    // 第二遍 KSA
+    sa = 0; sb = 0; sc = 0; sd = 0;
+    for (int i = 0, j = nlen; i < N; i++, j++) {
+      if (j >= vary_start) {
+        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      } else {
+        u8_t kb = a[j];
+        sa += kb + val[i]; std::swap(val[i], val[sa]);
+        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      }
       if (j == nlen) j = -1;
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
@@ -383,6 +438,49 @@ struct alignas(64) Name {
       sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
       sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
       sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      if (j == nlen) j = -1;
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
+  }
+
+  // ===== load_name_quad_shared_key(): 标量回退 — 共享 key load 四候选交错 KSA =====
+  void load_name_quad_shared_key(const char *a, const char *b, const char *c, const char *d,
+                                  int nlen, int vary_start, Name& ob, Name& oc, Name& od) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
+    memcpy(val, val_base2, sizeof val);
+    memcpy(ob.val, ob.val_base2, sizeof ob.val);
+    memcpy(oc.val, oc.val_base2, sizeof oc.val);
+    memcpy(od.val, od.val_base2, sizeof od.val);
+    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre;
+    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
+      if (j >= vary_start) {
+        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      } else {
+        u8_t kb = a[j];
+        sa += kb + val[i]; std::swap(val[i], val[sa]);
+        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      }
+      if (j == nlen) j = -1;
+    }
+    sa = 0; sb = 0; sc = 0; sd = 0;
+    for (int i = 0, j = nlen; i < N; i++, j++) {
+      if (j >= vary_start) {
+        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      } else {
+        u8_t kb = a[j];
+        sa += kb + val[i]; std::swap(val[i], val[sa]);
+        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+      }
       if (j == nlen) j = -1;
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
