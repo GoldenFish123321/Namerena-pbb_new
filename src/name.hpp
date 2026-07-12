@@ -123,10 +123,8 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
-  void finish_load() {
-    simd_mul_add_dual(val, ual, ual_skills);
-    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
+  // ===== finish_V(): 从 name_base 计算 V 值 (纯标量, 供 finish_load 复用) =====
+  void finish_V() {
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
@@ -140,6 +138,13 @@ struct alignas(64) Name {
     if (V < 250) return;
     sort10(name_base);
     V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+  }
+
+  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
+  void finish_load() {
+    simd_mul_add_dual(val, ual, ual_skills);
+    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
+    finish_V();
   }
 
   void load_name(const char *name, int name_len_hint = 0) {
