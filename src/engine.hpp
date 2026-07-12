@@ -21,7 +21,13 @@
 
 // ===== 候选交错宽度 (Issue #17 扩展实验) =====
 // 2=双路(默认) 3=三路交错 4=四路交错
+// ARM Cortex-A55 (in-order): 四路寄存器压力过大 → spill → 退化, 二路最优 (+12.7%)
+// x86-64 (out-of-order): 四路可充分利用 ROB 深度
+#ifdef __aarch64__
+#define PAIR_WIDTH 2
+#else
 #define PAIR_WIDTH 4
+#endif
 #include <random>
 #include <chrono>
 #include <atomic>
