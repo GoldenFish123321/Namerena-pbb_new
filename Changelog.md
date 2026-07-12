@@ -2,32 +2,20 @@
 
 ## 0.2.0
 
-感谢 [@spdc-elm](https://github.com/spdc-elm) 在 [#17](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/17) 中提出的系统性性能优化建议。
+**致谢**：感谢 [@spdc-elm](https://github.com/spdc-elm) 在 [#17](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/17) 提出的系统性性能优化建议。
 
-### 性能 ([#17](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/17), [#18](https://github.com/GoldenFish123321/Namerena-pbb_new/pull/18), [#22](https://github.com/GoldenFish123321/Namerena-pbb_new/pull/22))
-
-累计提升：Intel U7 255H 接近翻倍（~+100%），ARM 手机 0.3T/d → 0.5T/d（+67%）。
+**性能**（[#17](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/17), [#18](https://github.com/GoldenFish123321/Namerena-pbb_new/pull/18), [#22](https://github.com/GoldenFish123321/Namerena-pbb_new/pull/22)）— 累计提升：Intel U7 255H 接近翻倍（~+100%），ARM 手机 0.3T/d → 0.5T/d（+67%）
 
 - 四路 KSA 交错 (PAIR_WIDTH=4, `f117830`)：利用乱序核 ROB 深度隐藏 RC4 延迟，+50% 吞吐
 - SIMD 过滤 + 稳定压缩（方向二, `e128401`）：V 值/技能检查全面 SIMD 化，消除逐字节分支预测失败
 - 共享 key load（建议四, `f49f511`）：四候选 KSA 公共字节只 load 一次，+6%
 - ARM 自适应 (`f902960`)：Cortex-A55 等 in-order 核自动切换双路交错，+12.7%
 
-### 构建与发布
+**构建与发布**：`version.py` 单源版本号、通用 Windows 构建（`universal` 目标，`-march=x86-64`）、Release 工作流 tag 触发改为精确 semver
 
-- `version.py`：版本号单一源，发布只需改一行
-- 通用 Windows 构建：新增 `universal` 目标（`-march=x86-64`，无 SIMD 特化），所有 x86-64 可用
-- Release 工作流 tag 触发改为精确 semver
+**测试**：CI 新增 mode 2（随机种子）回归测试 (`d03b6b9`)
 
-### 测试
-
-- CI 新增 mode 2（随机种子）回归测试 (`d03b6b9`)
-
-### 修复
-
-- Windows CPUID 64-bit 指针截断 (`d124ae4`)
-- VNNI 编译器探测缺宿主机 CPU 验证 (`9d68b0a`)
-- `run.sh` 缺 `Python.h` 自动装 `python3-dev` (`09c3071`)
+**修复**：Windows CPUID 64-bit 指针截断 (`d124ae4`)、VNNI 编译器探测缺宿主机 CPU 验证 (`9d68b0a`)、`run.sh` 缺 `Python.h` 自动装 `python3-dev` (`09c3071`)
 
 ## 0.1.2
 
