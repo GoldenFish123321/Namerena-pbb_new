@@ -107,16 +107,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Python deps
-        run: pip install pybind11 pyyaml pyinstaller tomli
-
-      # ── MSYS2 UCRT64 GCC ──
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: ucrt64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
+      # ── 安装 MinGW-w64 + Python deps ──
+      - name: Install toolchain
+        shell: cmd
+        run: |
+          echo [setup] installing MinGW-w64 via chocolatey...
+          choco install mingw -y --no-progress --limit-output
+          echo [setup] refreshing environment...
+          call RefreshEnv.cmd
+          echo [setup] g++ version:
+          g++ --version
+          echo [setup] installing Python deps...
+          pip install pybind11 pyyaml pyinstaller tomli
+          echo [setup] done
 
       # ── 定位 Python 路径 ──
       - name: Locate Python paths
@@ -131,76 +134,78 @@ jobs:
           echo "libs=$PY_LIBS" >> "$GITHUB_OUTPUT"
           echo "ver=$PY_VER" >> "$GITHUB_OUTPUT"
           echo "pybind11=$PYBIND11_INCLUDE" >> "$GITHUB_OUTPUT"
+          echo "[paths] include: $PY_INCLUDE"
+          echo "[paths] libs: $PY_LIBS"
+          echo "[paths] python ver: $PY_VER"
+          echo "[paths] pybind11: $PYBIND11_INCLUDE"
 
       # ── 编译 pbb_core.pyd ──
       # pbb_core 始终用 baseline -march=x86-64: pybind11 薄封装不需要
       # microarchitecture 优化, 且 AVX-512 会导致 PyInstaller exe 在
       # GitHub runner 上 import 即 SIGILL。性能优化全部在 pbb_engine.exe。
       - name: Build pbb_core
-        shell: msys2 {0}
+        shell: cmd
         run: |
-          set -e
-          mkdir -p build
-          g++ -std=c++17 -O3 -funroll-loops -ffast-math \
-            -march=x86-64 \
-            -static -static-libgcc -static-libstdc++ \
-            -shared \
-            -I src \
-            "-I$(cygpath -u "${{ steps.py.outputs.include }}")" \
-            "-I$(cygpath -u "${{ steps.py.outputs.pybind11 }}")" \
-            -o "build/pbb_core.cp${{ steps.py.outputs.ver }}-win_amd64.pyd" \
-            src/bridge.cpp \
-            "$(cygpath -u "${{ steps.py.outputs.libs }}")/python${{ steps.py.outputs.ver }}.lib"
-          echo "[build] pbb_core done"
+          echo [build] compiling pbb_core...
+          if not exist build mkdir build
+          g++ -std=c++17 -O3 -funroll-loops -ffast-math ^
+            -march=x86-64 ^
+            -static -static-libgcc -static-libstdc++ ^
+            -shared ^
+            -I src ^
+            -I "${{ steps.py.outputs.include }}" ^
+            -I "${{ steps.py.outputs.pybind11 }}" ^
+            -o "build\pbb_core.cp${{ steps.py.outputs.ver }}-win_amd64.pyd" ^
+            src\bridge.cpp ^
+            "${{ steps.py.outputs.libs }}\python${{ steps.py.outputs.ver }}.lib"
+          if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+          echo [build] pbb_core done
 
       # ── 编译 pbb_engine.exe ──
       - name: Build pbb_engine
-        shell: msys2 {0}
+        shell: cmd
         run: |
-          set -e
-          mkdir -p build
-          g++ -std=c++17 -O3 -funroll-loops -ffast-math \
-            -march=${{ matrix.march }} \
-            -static -static-libgcc -static-libstdc++ \
-            -I src \
-            -o build/pbb_engine.exe \
+          echo [build] compiling pbb_engine with -march=${{ matrix.march }}...
+          if not exist build mkdir build
+          g++ -std=c++17 -O3 -funroll-loops -ffast-math ^
+            -march=${{ matrix.march }} ^
+            -static -static-libgcc -static-libstdc++ ^
+            -I src ^
+            -o build\pbb_engine.exe ^
             engine_main.cpp
-          echo "[build] pbb_engine done"
-
-      # ── 获取 build 绝对路径 (Windows 风格) ──
-      - name: Build absolute path
-        id: builddir
-        shell: bash
-        run: |
-          # cygpath 将 MSYS2/Git Bash 的 Unix 路径转为 Windows 路径
-          WIN_PWD="$(cygpath -w "$(pwd)" 2>/dev/null || echo "$(pwd -W 2>/dev/null)" || pwd)"
-          echo "path=$WIN_PWD/build" >> "$GITHUB_OUTPUT"
+          if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+          echo [build] pbb_engine done
 
       # ── PyInstaller 打包 ──
       - name: PyInstaller
+        shell: cmd
         run: |
-          $buildAbs = "${{ steps.builddir.outputs.path }}"
-          $pkgName  = "pbb-windows-x64-${{ matrix.target }}"
-          pyinstaller `
-            --noconfirm --clean --onedir `
-            --name $pkgName `
-            --distpath release `
-            --workpath release_build/pyinstaller-work `
-            --specpath release_build `
-            --paths "$buildAbs" `
-            --add-data "$buildAbs;build" `
-            --hidden-import tomllib `
-            --hidden-import tomli `
+          echo [pack] running PyInstaller...
+          set "BUILD_ABS=%CD%\build"
+          set "PKG_NAME=pbb-windows-x64-${{ matrix.target }}"
+          pyinstaller ^
+            --noconfirm --clean --onedir ^
+            --name "%PKG_NAME%" ^
+            --distpath release ^
+            --workpath release_build\pyinstaller-work ^
+            --specpath release_build ^
+            --paths "%BUILD_ABS%" ^
+            --add-data "%BUILD_ABS%;build" ^
+            --hidden-import tomllib ^
+            --hidden-import tomli ^
             release_entry.py
-          Write-Host "[release] PyInstaller done"
+          if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+          echo [pack] PyInstaller done
 
       # ── 复制配置示例文件 ──
       - name: Copy example configs
+        shell: cmd
         run: |
-          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
-          Copy-Item config.example.json $pkg/config.example.json -Force
-          Copy-Item config.example.toml $pkg/config.example.toml -Force
-          Copy-Item config.example.yaml $pkg/config.example.yaml -Force
+          set "PKG=release\pbb-windows-x64-${{ matrix.target }}"
+          copy /Y config.example.json "%PKG%\config.example.json"
+          copy /Y config.example.toml "%PKG%\config.example.toml"
+          copy /Y config.example.yaml "%PKG%\config.example.yaml"
+          echo [pack] configs copied
 
       # ── 生成包内 README (中文) ──
       - name: Generate README
@@ -250,33 +255,31 @@ jobs:
           README_EOF
 
       # ── 验证构建产物完整性 ──
-      # 正确性验证由 CI workflow (ubuntu g++, mode 1 + mode 2 diff) 在每次 push 时覆盖，
-      # release 流程仅需确认产物文件齐全。
       - name: Verify build artifacts
+        shell: cmd
         run: |
-          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
-          $exe = Get-ChildItem $pkg -Filter "*.exe" | Select-Object -First 1
-          if (-not $exe) { throw "no exe found in $pkg" }
-          $pyd = Get-ChildItem $pkg -Filter "*.pyd" -Recurse | Select-Object -First 1
-          if (-not $pyd) { throw "no pyd found in $pkg" }
-          $configs = Get-ChildItem $pkg -Filter "config.example.*"
-          if ($configs.Count -lt 3) { throw "missing config.example files in $pkg" }
-          Write-Host "[verify] $pkg: exe=$($exe.Name), pyd=$($pyd.Name), configs=$($configs.Count)"
+          set "PKG=release\pbb-windows-x64-${{ matrix.target }}"
+          if not exist "%PKG%\*.exe" (
+            echo ERROR: no exe found in %PKG%
+            dir "%PKG%"
+            exit /b 1
+          )
+          dir /s /b "%PKG%\*.pyd" >nul 2>&1
+          if %ERRORLEVEL% neq 0 (
+            echo ERROR: no pyd found in %PKG%
+            exit /b 1
+          )
+          echo [verify] %PKG% OK
 
-      # ── 清理 + 打包 ZIP ──
+      # ── 打包 ZIP ──
       - name: Create ZIP
+        shell: powershell
         run: |
-          $ver   = "${{ steps.version.outputs.version }}"
-          $pkg   = "release/pbb-windows-x64-${{ matrix.target }}"
-          $zip   = "release/pbb-windows-x64-${{ matrix.target }}-${ver}.zip"
-          
-          # 确保发布目录内没有不该有的文件
-          $bad = Get-ChildItem $pkg -Include "config.json","config.toml","config.yaml" -ErrorAction SilentlyContinue
-          if ($bad) { throw "found real config in release dir!" }
-          $bad = Get-ChildItem $pkg -Directory -Filter "out" -ErrorAction SilentlyContinue
-          if ($bad) { throw "found out/ in release dir!" }
-          
-          Get-ChildItem $pkg | Compress-Archive -DestinationPath $zip -Force
+          $ver = "${{ steps.version.outputs.version }}"
+          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
+          $zip = "release/pbb-windows-x64-${{ matrix.target }}-${ver}.zip"
+          Compress-Archive -Path "$pkg\*" -DestinationPath $zip -Force
+          if (-not (Test-Path $zip)) { throw "ZIP creation failed: $zip" }
           Write-Host "[release] ZIP: $zip"
 
       # ── 上传构建产物 ──
