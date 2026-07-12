@@ -329,3 +329,179 @@ def run(config: dict, engine_bin: str = None, out_dir: str = None,
 
     return {"results": results, "max_xp": max_xp, "max_xd": max_xd,
             "max_sum": max_sum, "found": found, "speed": speed}
+
+
+def run_multi(config: dict, engine_bin: str = None, out_dir: str = None,
+              n_procs: int = None, result_file: str = "result.txt") -> dict:
+    """多进程并行: 将 range 均分为 n_procs 段, 每段独立 C++ 子进程.
+
+    n_procs: None=自动 (max(1, cpu_count//2)), 1=等价于 run().
+    每个子进程的结果写入 out/result_p{N}_{result_file}, 全部完成后合并.
+    """
+    rL = config["range_L"]
+    rR = config["range_R"]
+    total = rR - rL
+
+    if n_procs is None:
+        n_procs = max(1, (os.cpu_count() or 4) // 2)
+    if n_procs <= 1 or total <= 0:
+        return run(config, engine_bin, out_dir, result_file)
+
+    # 均分 range
+    chunk = (total + n_procs - 1) // n_procs
+    sub_ranges = []
+    for i in range(n_procs):
+        sl = rL + i * chunk
+        sr = min(rL + (i + 1) * chunk, rR)
+        if sl >= sr:
+            break
+        sub_ranges.append((sl, sr))
+    actual_n = len(sub_ranges)
+    if actual_n <= 1:
+        return run(config, engine_bin, out_dir, result_file)
+
+    # 每进程线程数: 总线程均分, 至少 1
+    n_threads = config.get("n_threads", os.cpu_count() or 4)
+    if n_threads == -1:
+        n_threads = os.cpu_count() or 4
+    thr_per_proc = max(1, n_threads // actual_n)
+
+    # 输出目录
+    _use_temp = out_dir is None
+    if _use_temp:
+        _tmp = tempfile.TemporaryDirectory()
+        out_dir = _tmp.name
+    result_dir = os.path.join(out_dir, "out")
+    os.makedirs(result_dir, exist_ok=True)
+
+    # 字符集 (build once, reuse for all subprocesses)
+    if "charset_hex" not in config:
+        import sys as _sys
+        _build_dir = os.path.join(_runtime_base_dir(), "build")
+        if _build_dir not in _sys.path:
+            _sys.path.insert(0, _build_dir)
+        import pbb_core
+        pbb_core.init_exhanzi()
+        config["charset_hex"] = _build_charset(config["character_set"])
+
+    charset_hex = config["charset_hex"]
+
+    # 引擎路径
+    if engine_bin is None:
+        base = _runtime_base_dir()
+        engine_bin = os.path.join(base, "build", "pbb_engine")
+        if sys.platform == "win32":
+            engine_bin += ".exe"
+
+    base_seed = config.get("seed", int(time.time() * 1e6) & 0x7FFFFFFFFFFFFFFF)
+
+    # 启动所有子进程
+    procs = []
+    sub_files = []
+    for i, (sl, sr) in enumerate(sub_ranges):
+        sub_cfg = dict(config)
+        sub_cfg["range_L"] = sl
+        sub_cfg["range_R"] = sr
+        sub_cfg["n_threads"] = thr_per_proc
+        sub_cfg["seed"] = base_seed + i * 1000003  # 每进程独立种子
+        sub_file = f"result_p{i}_{result_file}"
+        sub_files.append(sub_file)
+
+        params = _build_params(sub_cfg, charset_hex, sub_file)
+        proc = subprocess.Popen(
+            [engine_bin], stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", cwd=out_dir)
+        proc.stdin.write(params)
+        proc.stdin.close()
+        procs.append(proc)
+
+    # 等待所有子进程, 收集进度
+    import select as _sel
+    t0 = time.time()
+    _interrupted = False
+
+    def _kill_all():
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+
+    old_handler = signal.signal(signal.SIGINT, lambda s, f: (_kill_all(), sys.exit(130)))
+
+    try:
+        # 简单的轮询等待 (Windows select 不支持 pipe)
+        all_done = False
+        while not all_done:
+            all_done = True
+            for i, p in enumerate(procs):
+                if p.poll() is None:
+                    all_done = False
+                # 读取 stderr 进度行
+                try:
+                    line = p.stderr.readline()
+                    if line:
+                        line = line.strip()
+                        if line and ("task" in line or "tot=" in line):
+                            print(f"  [p{i}] {line}", file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+            if not all_done:
+                time.sleep(0.1)
+
+        # 检查退出码
+        for i, p in enumerate(procs):
+            if p.returncode != 0:
+                _kill_all()
+                raise RuntimeError(f"Engine process {i} failed ({p.returncode})")
+    finally:
+        signal.signal(signal.SIGINT, old_handler)
+        if _use_temp:
+            pass  # keep temp dir until after merge
+
+    elapsed = time.time() - t0
+
+    # 合并结果
+    all_results = []
+    mxp, mxd, mx_sum = 0, 0, 0
+    total_found = 0
+    total_processed = 0
+    for sub_file in sub_files:
+        path = os.path.join(result_dir, sub_file)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.rsplit(" ", 2)
+                    if len(parts) == 3:
+                        try:
+                            xp, xd = int(parts[1]), int(parts[2])
+                            all_results.append({"name": parts[0], "xp": xp, "xd": xd})
+                            mxp = max(mxp, xp)
+                            mxd = max(mxd, xd)
+                        except ValueError:
+                            pass
+                    else:
+                        all_results.append({"name": line, "xp": 0, "xd": 0})
+                    total_found += 1
+        total_processed += (sub_ranges[sub_files.index(sub_file)][1] -
+                            sub_ranges[sub_files.index(sub_file)][0])
+
+    # 写入合并结果
+    merged_path = os.path.join(result_dir, result_file)
+    output_xp = config.get("output_xp", 1)
+    with open(merged_path, "w", encoding="utf-8") as f:
+        for r in all_results:
+            if output_xp:
+                f.write(f"{r['name']} {r['xp']} {r['xd']}\n")
+            else:
+                f.write(f"{r['name']}\n")
+
+    speed = total_processed / elapsed if elapsed > 0 and total_processed > 0 else 0
+
+    if _use_temp:
+        _tmp.cleanup()
+
+    return {"results": all_results, "max_xp": mxp, "max_xd": mxd,
+            "max_sum": mx_sum, "found": total_found, "speed": speed}
