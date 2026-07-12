@@ -32,6 +32,13 @@ def _ensure_release_engine(rebuild: bool = False, verbose: bool = False) -> str:
 
 
 def main() -> None:
+    # Force UTF-8 for stdout/stderr (PyInstaller bundle defaults to system codepage)
+    if sys.stdout.encoding != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stderr.encoding != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8")
+    # PyInstaller bundles build/ as data dir, not on sys.path — needed for pbb_core import
+    sys.path.insert(0, os.path.join(_bundle_base(), "build"))
     app_main.ensure_all = _ensure_release_engine
     app_main.main()
 
