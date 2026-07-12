@@ -52,7 +52,6 @@ struct alignas(64) Name {
   int PRELEN;                       // load_prefix 预处理的名字字节数
   int NAMELEN;                      // 名字总长度
   bool _ksa_done = false;           // 内部: load_name_pair 已做完 KSA 时跳过重做
-  bool _finish_done = false;        // 内部: finish_load_quad 已做完 SIMD 后处理时跳过重做
 
   // ===== m(): RC4 PRGA 单步 =====
   // 标准 RC4: i++, j = (j + S[i]), swap(S[i], S[j]), 输出 S[(S[i]+S[j]) & 255]
@@ -124,7 +123,7 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== finish_V(): 从 name_base 计算 V 值 (无 SIMD, 供 finish_load/finish_load_quad 共用) =====
+  // ===== finish_V(): 从 name_base 计算 V 值 (纯标量, 供 finish_load 复用) =====
   void finish_V() {
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
@@ -166,9 +165,7 @@ struct alignas(64) Name {
       }
     }
     _ksa_done = false;
-    if (!_finish_done)
-      finish_load();
-    _finish_done = false;
+    finish_load();
   }
 
   // ===== load_name_pair(): 双候选交错 RC4 KSA (Issue #17 方向一) =====
@@ -256,217 +253,6 @@ struct alignas(64) Name {
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
   }
-
-  // ===== finish_load_quad(): 四候选交错 finish_load (Issue #17 建议三) =====
-  // 在 load_name_quad 交错 KSA 之后，将 finish_load 的 SIMD 后处理也交错执行。
-  // 四个候选的 simd_mul_add_dual / simd_filter_range_attr 在指令级交错，
-  // 利用乱序核心隐藏 load-use 延迟。
-  // 完成后设置 _finish_done=true，后续 load_name() 跳过 finish_load()。
-#if PBB_HAS_AVX512
-  void finish_load_quad(Name& ob, Name& oc, Name& od) {
-    const __m512i vmul  = _mm512_set1_epi16(181);
-    const __m512i vaddA = _mm512_set1_epi16(160);
-    const __m512i vaddS = _mm512_set1_epi16(71);
-    const __m512i vmask = _mm512_set1_epi16(0xFF);
-    const __m512i vzero = _mm512_setzero_si512();
-    // simd_mul_add_dual: 四候选交错 (64B/chunk)
-    for (int i = 0; i < 256; i += 64) {
-      __m512i va = _mm512_loadu_si512((const __m512i*)&val[i]);
-      __m512i vb = _mm512_loadu_si512((const __m512i*)&ob.val[i]);
-      __m512i vc = _mm512_loadu_si512((const __m512i*)&oc.val[i]);
-      __m512i vd = _mm512_loadu_si512((const __m512i*)&od.val[i]);
-      // a
-      __m512i lo = _mm512_unpacklo_epi8(va, vzero);
-      __m512i hi = _mm512_unpackhi_epi8(va, vzero);
-      __m512i loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
-      __m512i hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
-      __m512i loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
-      __m512i hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
-      _mm512_storeu_si512((__m512i*)&ual[i], _mm512_packus_epi16(_mm512_and_si512(loA,vmask), _mm512_and_si512(hiA,vmask)));
-      _mm512_storeu_si512((__m512i*)&ual_skills[i], _mm512_packus_epi16(_mm512_and_si512(loS,vmask), _mm512_and_si512(hiS,vmask)));
-      // b
-      lo = _mm512_unpacklo_epi8(vb, vzero); hi = _mm512_unpackhi_epi8(vb, vzero);
-      loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
-      _mm512_storeu_si512((__m512i*)&ob.ual[i], _mm512_packus_epi16(_mm512_and_si512(loA,vmask), _mm512_and_si512(hiA,vmask)));
-      _mm512_storeu_si512((__m512i*)&ob.ual_skills[i], _mm512_packus_epi16(_mm512_and_si512(loS,vmask), _mm512_and_si512(hiS,vmask)));
-      // c
-      lo = _mm512_unpacklo_epi8(vc, vzero); hi = _mm512_unpackhi_epi8(vc, vzero);
-      loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
-      _mm512_storeu_si512((__m512i*)&oc.ual[i], _mm512_packus_epi16(_mm512_and_si512(loA,vmask), _mm512_and_si512(hiA,vmask)));
-      _mm512_storeu_si512((__m512i*)&oc.ual_skills[i], _mm512_packus_epi16(_mm512_and_si512(loS,vmask), _mm512_and_si512(hiS,vmask)));
-      // d
-      lo = _mm512_unpacklo_epi8(vd, vzero); hi = _mm512_unpackhi_epi8(vd, vzero);
-      loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
-      _mm512_storeu_si512((__m512i*)&od.ual[i], _mm512_packus_epi16(_mm512_and_si512(loA,vmask), _mm512_and_si512(hiA,vmask)));
-      _mm512_storeu_si512((__m512i*)&od.ual_skills[i], _mm512_packus_epi16(_mm512_and_si512(loS,vmask), _mm512_and_si512(hiS,vmask)));
-    }
-    // simd_filter_range_attr: 四候选交错 (64B/chunk)
-    for (int i = 0; i < 256; i += 64) {
-      __m512i da = _mm512_loadu_si512((const __m512i*)&ual[i]);
-      __m512i db = _mm512_loadu_si512((const __m512i*)&ob.ual[i]);
-      __m512i dc = _mm512_loadu_si512((const __m512i*)&oc.ual[i]);
-      __m512i dd = _mm512_loadu_si512((const __m512i*)&od.ual[i]);
-      __mmask64 ge_a = _mm512_cmp_epu8_mask(da, _mm512_set1_epi8(88), _MM_CMPINT_GT);
-      __mmask64 lt_a = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), da, _MM_CMPINT_GT);
-      __mmask64 mask_a = ge_a & lt_a;
-      __mmask64 ge_b = _mm512_cmp_epu8_mask(db, _mm512_set1_epi8(88), _MM_CMPINT_GT);
-      __mmask64 lt_b = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), db, _MM_CMPINT_GT);
-      __mmask64 mask_b = ge_b & lt_b;
-      __mmask64 ge_c = _mm512_cmp_epu8_mask(dc, _mm512_set1_epi8(88), _MM_CMPINT_GT);
-      __mmask64 lt_c = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), dc, _MM_CMPINT_GT);
-      __mmask64 mask_c = ge_c & lt_c;
-      __mmask64 ge_d = _mm512_cmp_epu8_mask(dd, _mm512_set1_epi8(88), _MM_CMPINT_GT);
-      __mmask64 lt_d = _mm512_cmp_epu8_mask(_mm512_set1_epi8(217), dd, _MM_CMPINT_GT);
-      __mmask64 mask_d = ge_d & lt_d;
-      while (mask_a && q_len < 30) { int idx = __builtin_ctzll(mask_a); name_base[++q_len] = ual[i+idx] & 63; mask_a &= mask_a - 1; }
-      while (mask_b && ob.q_len < 30) { int idx = __builtin_ctzll(mask_b); ob.name_base[++ob.q_len] = ob.ual[i+idx] & 63; mask_b &= mask_b - 1; }
-      while (mask_c && oc.q_len < 30) { int idx = __builtin_ctzll(mask_c); oc.name_base[++oc.q_len] = oc.ual[i+idx] & 63; mask_c &= mask_c - 1; }
-      while (mask_d && od.q_len < 30) { int idx = __builtin_ctzll(mask_d); od.name_base[++od.q_len] = od.ual[i+idx] & 63; mask_d &= mask_d - 1; }
-    }
-    finish_V(); ob.finish_V(); oc.finish_V(); od.finish_V();
-    _finish_done = ob._finish_done = oc._finish_done = od._finish_done = true;
-  }
-#elif PBB_HAS_AVX2
-  void finish_load_quad(Name& ob, Name& oc, Name& od) {
-    const __m256i vmul  = _mm256_set1_epi16(181);
-    const __m256i vaddA = _mm256_set1_epi16(160);
-    const __m256i vaddS = _mm256_set1_epi16(71);
-    const __m256i vmask = _mm256_set1_epi16(0xFF);
-    const __m256i vzero = _mm256_setzero_si256();
-    // simd_mul_add_dual: 四候选交错 (32B/chunk, 共 8 次迭代)
-    for (int i = 0; i < 256; i += 32) {
-      __m256i va = _mm256_loadu_si256((const __m256i*)&val[i]);
-      __m256i vb = _mm256_loadu_si256((const __m256i*)&ob.val[i]);
-      __m256i vc = _mm256_loadu_si256((const __m256i*)&oc.val[i]);
-      __m256i vd = _mm256_loadu_si256((const __m256i*)&od.val[i]);
-      // a
-      __m256i lo = _mm256_unpacklo_epi8(va, vzero);
-      __m256i hi = _mm256_unpackhi_epi8(va, vzero);
-      __m256i loA = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddA);
-      __m256i hiA = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddA);
-      __m256i loS = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddS);
-      __m256i hiS = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddS);
-      _mm256_storeu_si256((__m256i*)&ual[i], _mm256_packus_epi16(_mm256_and_si256(loA,vmask), _mm256_and_si256(hiA,vmask)));
-      _mm256_storeu_si256((__m256i*)&ual_skills[i], _mm256_packus_epi16(_mm256_and_si256(loS,vmask), _mm256_and_si256(hiS,vmask)));
-      // b
-      lo = _mm256_unpacklo_epi8(vb, vzero); hi = _mm256_unpackhi_epi8(vb, vzero);
-      loA = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddS);
-      _mm256_storeu_si256((__m256i*)&ob.ual[i], _mm256_packus_epi16(_mm256_and_si256(loA,vmask), _mm256_and_si256(hiA,vmask)));
-      _mm256_storeu_si256((__m256i*)&ob.ual_skills[i], _mm256_packus_epi16(_mm256_and_si256(loS,vmask), _mm256_and_si256(hiS,vmask)));
-      // c
-      lo = _mm256_unpacklo_epi8(vc, vzero); hi = _mm256_unpackhi_epi8(vc, vzero);
-      loA = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddS);
-      _mm256_storeu_si256((__m256i*)&oc.ual[i], _mm256_packus_epi16(_mm256_and_si256(loA,vmask), _mm256_and_si256(hiA,vmask)));
-      _mm256_storeu_si256((__m256i*)&oc.ual_skills[i], _mm256_packus_epi16(_mm256_and_si256(loS,vmask), _mm256_and_si256(hiS,vmask)));
-      // d
-      lo = _mm256_unpacklo_epi8(vd, vzero); hi = _mm256_unpackhi_epi8(vd, vzero);
-      loA = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddA);
-      hiA = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddA);
-      loS = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddS);
-      hiS = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddS);
-      _mm256_storeu_si256((__m256i*)&od.ual[i], _mm256_packus_epi16(_mm256_and_si256(loA,vmask), _mm256_and_si256(hiA,vmask)));
-      _mm256_storeu_si256((__m256i*)&od.ual_skills[i], _mm256_packus_epi16(_mm256_and_si256(loS,vmask), _mm256_and_si256(hiS,vmask)));
-    }
-    // simd_filter_range_attr: 四候选交错 (32B/chunk)
-    const __m256i v88  = _mm256_set1_epi8(88);
-    const __m256i v216 = _mm256_set1_epi8(216);
-    for (int i = 0; i < 256; i += 32) {
-      __m256i da = _mm256_loadu_si256((const __m256i*)&ual[i]);
-      __m256i db = _mm256_loadu_si256((const __m256i*)&ob.ual[i]);
-      __m256i dc = _mm256_loadu_si256((const __m256i*)&oc.ual[i]);
-      __m256i dd = _mm256_loadu_si256((const __m256i*)&od.ual[i]);
-      __m256i ge_a = _mm256_xor_si256(_mm256_cmpeq_epi8(_mm256_subs_epu8(da, v88), vzero), _mm256_set1_epi8(0xFF));
-      __m256i lt_a = _mm256_cmpeq_epi8(_mm256_subs_epu8(da, v216), vzero);
-      unsigned mask_a = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_a, lt_a));
-      __m256i ge_b = _mm256_xor_si256(_mm256_cmpeq_epi8(_mm256_subs_epu8(db, v88), vzero), _mm256_set1_epi8(0xFF));
-      __m256i lt_b = _mm256_cmpeq_epi8(_mm256_subs_epu8(db, v216), vzero);
-      unsigned mask_b = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_b, lt_b));
-      __m256i ge_c = _mm256_xor_si256(_mm256_cmpeq_epi8(_mm256_subs_epu8(dc, v88), vzero), _mm256_set1_epi8(0xFF));
-      __m256i lt_c = _mm256_cmpeq_epi8(_mm256_subs_epu8(dc, v216), vzero);
-      unsigned mask_c = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_c, lt_c));
-      __m256i ge_d = _mm256_xor_si256(_mm256_cmpeq_epi8(_mm256_subs_epu8(dd, v88), vzero), _mm256_set1_epi8(0xFF));
-      __m256i lt_d = _mm256_cmpeq_epi8(_mm256_subs_epu8(dd, v216), vzero);
-      unsigned mask_d = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_d, lt_d));
-      while (mask_a && q_len < 30) { int idx = __builtin_ctz(mask_a); name_base[++q_len] = ual[i+idx] & 63; mask_a &= mask_a - 1; }
-      while (mask_b && ob.q_len < 30) { int idx = __builtin_ctz(mask_b); ob.name_base[++ob.q_len] = ob.ual[i+idx] & 63; mask_b &= mask_b - 1; }
-      while (mask_c && oc.q_len < 30) { int idx = __builtin_ctz(mask_c); oc.name_base[++oc.q_len] = oc.ual[i+idx] & 63; mask_c &= mask_c - 1; }
-      while (mask_d && od.q_len < 30) { int idx = __builtin_ctz(mask_d); od.name_base[++od.q_len] = od.ual[i+idx] & 63; mask_d &= mask_d - 1; }
-    }
-    finish_V(); ob.finish_V(); oc.finish_V(); od.finish_V();
-    _finish_done = ob._finish_done = oc._finish_done = od._finish_done = true;
-  }
-#elif PBB_HAS_NEON
-  void finish_load_quad(Name& ob, Name& oc, Name& od) {
-    // NEON: 四候选交错 simd_mul_add_dual (16B/chunk, 共 16 次迭代)
-    const uint8x16_t vmul  = vdupq_n_u8(181);
-    const uint8x16_t vaddA = vdupq_n_u8(160);
-    const uint8x16_t vaddS = vdupq_n_u8(71);
-    for (int i = 0; i < 256; i += 16) {
-      uint8x16_t va = vld1q_u8(&val[i]);
-      uint8x16_t vb = vld1q_u8(&ob.val[i]);
-      uint8x16_t vc = vld1q_u8(&oc.val[i]);
-      uint8x16_t vd = vld1q_u8(&od.val[i]);
-      // a: 两个输出都需要 mul+add, NEON vmlaq_u8 是乘加指令
-      uint8x16_t ua_attr  = vaddq_u8(vmulq_u8(va, vmul), vaddA);
-      uint8x16_t ua_skill = vaddq_u8(vmulq_u8(va, vmul), vaddS);
-      vst1q_u8(&ual[i], ua_attr);
-      vst1q_u8(&ual_skills[i], ua_skill);
-      uint8x16_t ub_attr  = vaddq_u8(vmulq_u8(vb, vmul), vaddA);
-      uint8x16_t ub_skill = vaddq_u8(vmulq_u8(vb, vmul), vaddS);
-      vst1q_u8(&ob.ual[i], ub_attr);
-      vst1q_u8(&ob.ual_skills[i], ub_skill);
-      uint8x16_t uc_attr  = vaddq_u8(vmulq_u8(vc, vmul), vaddA);
-      uint8x16_t uc_skill = vaddq_u8(vmulq_u8(vc, vmul), vaddS);
-      vst1q_u8(&oc.ual[i], uc_attr);
-      vst1q_u8(&oc.ual_skills[i], uc_skill);
-      uint8x16_t ud_attr  = vaddq_u8(vmulq_u8(vd, vmul), vaddA);
-      uint8x16_t ud_skill = vaddq_u8(vmulq_u8(vd, vmul), vaddS);
-      vst1q_u8(&od.ual[i], ud_attr);
-      vst1q_u8(&od.ual_skills[i], ud_skill);
-    }
-    // simd_filter_range_attr: 四候选交错 (NEON 8B/chunk)
-    const uint8x8_t lower = vdup_n_u8(89);
-    const uint8x8_t upper = vdup_n_u8(217);
-    const uint8x8_t low_bits = vdup_n_u8(63);
-    const uint8x8_t bit_weights = {1, 2, 4, 8, 16, 32, 64, 128};
-    for (int i = 0; i < 256; i += 8) {
-      uint8x8_t da = vld1_u8(&ual[i]), db = vld1_u8(&ob.ual[i]);
-      uint8x8_t dc = vld1_u8(&oc.ual[i]), dd = vld1_u8(&od.ual[i]);
-      int ma = vaddv_u8(vand_u8(vand_u8(vcge_u8(da, lower), vclt_u8(da, upper)), bit_weights));
-      int mb = vaddv_u8(vand_u8(vand_u8(vcge_u8(db, lower), vclt_u8(db, upper)), bit_weights));
-      int mc = vaddv_u8(vand_u8(vand_u8(vcge_u8(dc, lower), vclt_u8(dc, upper)), bit_weights));
-      int md = vaddv_u8(vand_u8(vand_u8(vcge_u8(dd, lower), vclt_u8(dd, upper)), bit_weights));
-      if (ma) { uint8x8_t comp = vtbl1_u8(vand_u8(da, low_bits), vld1_u8(compress8_table.indexes[ma])); vst1_u8(name_base+q_len+1, comp); q_len+=compress8_table.counts[ma]; if(q_len>30)q_len=30; }
-      if (mb) { uint8x8_t comp = vtbl1_u8(vand_u8(db, low_bits), vld1_u8(compress8_table.indexes[mb])); vst1_u8(ob.name_base+ob.q_len+1, comp); ob.q_len+=compress8_table.counts[mb]; if(ob.q_len>30)ob.q_len=30; }
-      if (mc) { uint8x8_t comp = vtbl1_u8(vand_u8(dc, low_bits), vld1_u8(compress8_table.indexes[mc])); vst1_u8(oc.name_base+oc.q_len+1, comp); oc.q_len+=compress8_table.counts[mc]; if(oc.q_len>30)oc.q_len=30; }
-      if (md) { uint8x8_t comp = vtbl1_u8(vand_u8(dd, low_bits), vld1_u8(compress8_table.indexes[md])); vst1_u8(od.name_base+od.q_len+1, comp); od.q_len+=compress8_table.counts[md]; if(od.q_len>30)od.q_len=30; }
-    }
-    finish_V(); ob.finish_V(); oc.finish_V(); od.finish_V();
-    _finish_done = ob._finish_done = oc._finish_done = od._finish_done = true;
-  }
-#else
-  // 回退: 无 SIMD 时串行调用 finish_load()
-  void finish_load_quad(Name& ob, Name& oc, Name& od) {
-    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
-    finish_load(); ob.finish_load(); oc.finish_load(); od.finish_load();
-    _finish_done = ob._finish_done = oc._finish_done = od._finish_done = true;
-  }
-#endif
 #else
   // ===== load_name(): 标量回退路径 =====
   // 无 AVX2 时的纯 C++ 实现。ual 计算通过手动展开循环 (每次 8 个)。
