@@ -18,6 +18,10 @@
 #include <vector>
 #include <cstring>
 #include <string>
+
+// ===== 候选交错宽度 (Issue #17 扩展实验) =====
+// 2=双路(默认) 3=三路交错 4=四路交错
+#define PAIR_WIDTH 4
 #include <random>
 #include <chrono>
 #include <atomic>
@@ -284,9 +288,27 @@ inline int engine_main(int argc,char**argv){
 
     auto cons=[&](int cid){(void)cid;
         Name name_a,name_b;
+#if PAIR_WIDTH >= 3
+        Name name_c;
+#endif
+#if PAIR_WIDTH >= 4
+        Name name_d;
+#endif
         memcpy(name_a.val_base,name_init.val_base,sizeof(name_a.val_base));
         memcpy(name_b.val_base,name_init.val_base,sizeof(name_b.val_base));
+#if PAIR_WIDTH >= 3
+        memcpy(name_c.val_base,name_init.val_base,sizeof(name_c.val_base));
+#endif
+#if PAIR_WIDTH >= 4
+        memcpy(name_d.val_base,name_init.val_base,sizeof(name_d.val_base));
+#endif
         char buf_b[512];
+#if PAIR_WIDTH >= 3
+        char buf_c[512];
+#endif
+#if PAIR_WIDTH >= 4
+        char buf_d[512];
+#endif
         TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
         const char* cb=cbytes.data();  // 局部缓存指针
@@ -310,7 +332,8 @@ inline int engine_main(int argc,char**argv){
                 if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
-        // ---- 编码 helper: 顺序进位 — 双候选交错 KSA (Issue #17) ----
+        // ---- 编码 helper: 顺序进位 — 多候选交错 KSA (Issue #17 扩展) ----
+#if PAIR_WIDTH == 2
         auto consume_seq=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
                               int epre,int evar,uint64_t L,uint64_t R){
             for(uint64_t i=L;i+1<R;i+=2){
@@ -328,8 +351,53 @@ inline int engine_main(int argc,char**argv){
                 process_one(buf_a,nlen,score_full(buf_a,nlen,na));
             }
         };
+#elif PAIR_WIDTH == 3
+        auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
+                              int epre,int evar,uint64_t L,uint64_t R){
+            for(uint64_t i=L;i+2<R;i+=3){
+                uint64_t now;
+                now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
+                now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
+                now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
+                na.load_name_triple(a,b,c,nlen,nb,nc);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+            }
+            // 尾块: fallback 到单路 load_name — 重置 _ksa_done 强制全 KSA
+            for(uint64_t i=L+((R-L)/3)*3;i<R;i++){
+                uint64_t now=i;
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
+                na._ksa_done = false; na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+            }
+        };
+#elif PAIR_WIDTH == 4
+        auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
+                              int epre,int evar,uint64_t L,uint64_t R){
+            for(uint64_t i=L;i+3<R;i+=4){
+                uint64_t now;
+                now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
+                now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
+                now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
+                now=i+3;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(d+p,ci);now/=clen;}
+                na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+                process_one(d,nlen,score_full(d,nlen,nd));
+            }
+            for(uint64_t i=L+((R-L)/4)*4;i<R;i++){
+                uint64_t now=i;
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
+                na._ksa_done = false; na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+            }
+        };
+#endif
 
-        // ---- 编码 helper: 随机逐位 — 双候选交错 KSA (Issue #17) ----
+        // ---- 编码 helper: 随机逐位 — 多候选交错 KSA (Issue #17 扩展) ----
+#if PAIR_WIDTH == 2
         auto consume_rand=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
                                int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
             for(uint64_t i=L;i+1<R;i+=2){
@@ -345,8 +413,48 @@ inline int engine_main(int argc,char**argv){
                 process_one(buf_a,nlen,score_full(buf_a,nlen,na));
             }
         };
+#elif PAIR_WIDTH == 3
+        auto consume_rand=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
+                               int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            for(uint64_t i=L;i+2<R;i+=3){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(b+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(c+p,ci);}
+                na.load_name_triple(a,b,c,nlen,nb,nc);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+            }
+            for(uint64_t i=L+((R-L)/3)*3;i<R;i++){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                na._ksa_done = false; na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+            }
+        };
+#elif PAIR_WIDTH == 4
+        auto consume_rand=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
+                               int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            for(uint64_t i=L;i+3<R;i+=4){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(b+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(c+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(d+p,ci);}
+                na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+                process_one(d,nlen,score_full(d,nlen,nd));
+            }
+            for(uint64_t i=L+((R-L)/4)*4;i<R;i++){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                na._ksa_done = false; na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+            }
+        };
+#endif
 
-        // ---- mode 1: 顺序区间 — 双候选交错 KSA (Issue #17) ----
+        // ---- mode 1: 顺序区间 — 多候选交错 KSA (Issue #17 扩展) ----
+#if PAIR_WIDTH == 2
         auto consume_mode1=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,int plen,int vlen,uint64_t L,uint64_t R){
             na.PRELEN=plen;na.load_prefix(buf_a,nlen);
             nb.PRELEN=plen;nb.load_prefix(buf_a,nlen);
@@ -359,8 +467,42 @@ inline int engine_main(int argc,char**argv){
             int epre=plen+up*scl,evar=vlen-up;
             consume_seq(buf_a,nlen,na,buf_b,nb,epre,evar,L,R);
         };
+#elif PAIR_WIDTH == 3
+        auto consume_mode1=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,int plen,int vlen,uint64_t L,uint64_t R){
+            na.PRELEN=plen;na.load_prefix(a,nlen);
+            nb.PRELEN=plen;nb.load_prefix(a,nlen);
+            nc.PRELEN=plen;nc.load_prefix(a,nlen);
+            uint8_t dl[16],dr[16];uint64_t now;
+            now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
+            now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
+            int up=0;while(up<vlen&&dl[up]==dr[up])up++;
+            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(a+plen+d*scl,ci);now/=clen;}
+            now=L+1;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(b+plen+d*scl,ci);now/=clen;}
+            now=L+2;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(c+plen+d*scl,ci);now/=clen;}
+            int epre=plen+up*scl,evar=vlen-up;
+            consume_seq(a,nlen,na,b,nb,c,nc,epre,evar,L,R);
+        };
+#elif PAIR_WIDTH == 4
+        auto consume_mode1=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* buf_d,Name& nd,int plen,int vlen,uint64_t L,uint64_t R){
+            na.PRELEN=plen;na.load_prefix(a,nlen);
+            nb.PRELEN=plen;nb.load_prefix(a,nlen);
+            nc.PRELEN=plen;nc.load_prefix(a,nlen);
+            nd.PRELEN=plen;nd.load_prefix(a,nlen);
+            uint8_t dl[16],dr[16];uint64_t now;
+            now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
+            now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
+            int up=0;while(up<vlen&&dl[up]==dr[up])up++;
+            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(a+plen+d*scl,ci);now/=clen;}
+            now=L+1;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(b+plen+d*scl,ci);now/=clen;}
+            now=L+2;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(c+plen+d*scl,ci);now/=clen;}
+            now=L+3;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf_d+plen+d*scl,ci);now/=clen;}
+            int epre=plen+up*scl,evar=vlen-up;
+            consume_seq(a,nlen,na,b,nb,c,nc,buf_d,nd,epre,evar,L,R);
+        };
+#endif
 
-        // ---- mode 2/4: 随机额外字符 + 随机区间 — 双候选交错 KSA (Issue #17) ----
+        // ---- mode 2/4: 随机额外字符 + 随机区间 — 多候选交错 KSA (Issue #17 扩展) ----
+#if PAIR_WIDTH == 2
         auto consume_mode24=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
                                  int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
             int extra=vlen-varlen_task;
@@ -372,8 +514,37 @@ inline int engine_main(int argc,char**argv){
             L=rng()%random_range_max;R=L+CHUNK_SIZE;
             consume_seq(buf_a,nlen,na,buf_b,nb,epre,evar,L,R);
         };
+#elif PAIR_WIDTH == 3
+        auto consume_mode24=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
+                                 int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            L=rng()%random_range_max;R=L+CHUNK_SIZE;
+            consume_seq(a,nlen,na,b,nb,c,nc,epre,evar,L,R);
+        };
+#elif PAIR_WIDTH == 4
+        auto consume_mode24=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
+                                 int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);memcpy(d,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            nd.PRELEN=epre;nd.load_prefix(d,nlen);
+            L=rng()%random_range_max;R=L+CHUNK_SIZE;
+            consume_seq(a,nlen,na,b,nb,c,nc,d,nd,epre,evar,L,R);
+        };
+#endif
 
-        // ---- mode 3: 随机额外字符 + 随机逐位 — 双候选交错 KSA (Issue #17) ----
+        // ---- mode 3: 随机额外字符 + 随机逐位 — 多候选交错 KSA (Issue #17 扩展) ----
+#if PAIR_WIDTH == 2
         auto consume_mode3=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
                                 int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
             int extra=vlen-varlen_task;
@@ -384,6 +555,32 @@ inline int engine_main(int argc,char**argv){
             nb.PRELEN=epre;nb.load_prefix(buf_b,nlen);
             consume_rand(buf_a,nlen,na,buf_b,nb,epre,evar,L,R,rng);
         };
+#elif PAIR_WIDTH == 3
+        auto consume_mode3=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
+                                int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            consume_rand(a,nlen,na,b,nb,c,nc,epre,evar,L,R,rng);
+        };
+#elif PAIR_WIDTH == 4
+        auto consume_mode3=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
+                                int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);memcpy(d,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            nd.PRELEN=epre;nd.load_prefix(d,nlen);
+            consume_rand(a,nlen,na,b,nb,c,nc,d,nd,epre,evar,L,R,rng);
+        };
+#endif
 
         while(true){
             // 动态线程数: 如果当前线程 id >= target_threads, 睡眠等待
@@ -403,11 +600,23 @@ inline int engine_main(int argc,char**argv){
             buf[nlen]=0;  // 修复: load_prefix/load_name 循环第一轮读 name[nlen], 与 pbb_all.cpp 全局零初始化对齐
             uint64_t L=t.L,R=t.R;
 
-            // 模式分发: 各模式独立的编码逻辑 (双候选交错 KSA)
+            // 模式分发: 各模式独立的编码逻辑 (多候选交错 KSA, Issue #17 扩展)
+#if PAIR_WIDTH == 2
             memcpy(buf_b,buf,nlen+1);
             if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,plen,vlen,L,R);
             else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,plen,L,R,rng);
             else             consume_mode24(buf,nlen,name_a,buf_b,name_b,plen,L,R,rng);  // mode 2/4
+#elif PAIR_WIDTH == 3
+            memcpy(buf_b,buf,nlen+1);memcpy(buf_c,buf,nlen+1);
+            if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,plen,vlen,L,R);
+            else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,plen,L,R,rng);
+            else             consume_mode24(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,plen,L,R,rng);
+#elif PAIR_WIDTH == 4
+            memcpy(buf_b,buf,nlen+1);memcpy(buf_c,buf,nlen+1);memcpy(buf_d,buf,nlen+1);
+            if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,plen,vlen,L,R);
+            else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,plen,L,R,rng);
+            else             consume_mode24(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,plen,L,R,rng);
+#endif
 
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====
             {
