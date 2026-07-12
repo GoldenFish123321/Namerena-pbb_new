@@ -25,7 +25,6 @@ from typing import Any
 
 from build import ensure_all          # 编译模块
 from engine import run as run_engine  # 引擎执行
-from engine import run_multi           # 多进程并行 (P0)
 from config_schema import (           # config→engine 映射唯一真相源
     CONFIG_MAP, read_config, engine_default,
 )
@@ -294,8 +293,6 @@ def main():
                         help="配置文件路径 (默认依次尝试 config.json/yaml/toml)")
     parser.add_argument("--rebuild", action="store_true", help="强制重编 C++ 引擎")
     parser.add_argument("--threads", type=int, help="覆盖: threads.worker_threads (-1=自动)")
-    parser.add_argument("-j", "--jobs", type=int, default=1,
-                        help="多进程并行数: 均分 range 到 N 个独立 C++ 子进程 (默认 1)")
     parser.add_argument("--team", help="覆盖: team_name")
     parser.add_argument("--mode", type=int, help="覆盖: enumeration.mode (1=顺序 2/3/4=随机)")
     parser.add_argument("--vlen", type=int, help="覆盖: enumeration.variable_length")
@@ -419,11 +416,7 @@ def main():
 
     t0 = time.time()
     try:
-        if args.jobs > 1:
-            result = run_multi(task_config, engine_bin, out_dir=out_dir,
-                               n_procs=args.jobs, result_file=result_file)
-        else:
-            result = run_engine(task_config, engine_bin, out_dir=out_dir, result_file=result_file)
+        result = run_engine(task_config, engine_bin, out_dir=out_dir, result_file=result_file)
     except KeyboardInterrupt:
         print("\n[main] Interrupted", file=sys.stderr)
         sys.exit(130)
