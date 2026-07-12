@@ -29,8 +29,9 @@ from config_schema import (           # config→engine 映射唯一真相源
     CONFIG_MAP, read_config, engine_default,
 )
 
+from version import VERSION
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "0.1.2"
 
 
 def _resolve_result_file(raw: str) -> str:
@@ -289,7 +290,7 @@ def _build_task_config(cfg: dict) -> dict:
 
 
 def main():
-    print(f"[main] Version: {APP_VERSION}", file=sys.stderr)
+    print(f"[main] Version: {VERSION}", file=sys.stderr)
 
     # ── 1. 解析命令行 ──
     parser = argparse.ArgumentParser(description="PBB 名字评分测号器")

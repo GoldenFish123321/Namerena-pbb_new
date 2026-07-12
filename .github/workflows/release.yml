@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*', '[0-9]*']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
   workflow_dispatch:
     inputs:
       version:
@@ -57,6 +57,12 @@ jobs:
             cpu_label: 'AMD Zen5 / Zen5c / Fire Range'
             cpu_cover: 'Ryzen AI 9、9955HX3D'
 
+          - target: universal
+            march: x86-64
+            simd_display: 'none'
+            cpu_label: '通用 (所有 x86-64)'
+            cpu_cover: '所有支持 x86-64 的 Windows 系统'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -83,18 +89,18 @@ jobs:
           VER_TAG="${VER//./_}"
           echo "ver_tag=$VER_TAG" >> "$GITHUB_OUTPUT"
 
-      # ── 校验 main.py APP_VERSION 与 tag 一致 ──
-      - name: Validate APP_VERSION
+      # ── 校验 version.py VERSION 与 tag 一致 ──
+      - name: Validate VERSION
         shell: bash
         run: |
-          APP_VER=$(grep -oP 'APP_VERSION\s*=\s*"\K[^"]+' main.py)
+          APP_VER=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' version.py)
           TAG_VER="${{ steps.version.outputs.version }}"
           if [ "$APP_VER" != "$TAG_VER" ]; then
-            echo "ERROR: APP_VERSION mismatch: main.py=$APP_VER, tag=$TAG_VER"
-            echo "Update APP_VERSION in main.py before tagging."
+            echo "ERROR: VERSION mismatch: version.py=$APP_VER, tag=$TAG_VER"
+            echo "Update VERSION in version.py before tagging."
             exit 1
           fi
-          echo "[check] APP_VERSION=$APP_VER matches tag"
+          echo "[check] version.py VERSION=$APP_VER matches tag"
 
       # ── Python ──
       - uses: actions/setup-python@v5
@@ -371,6 +377,7 @@ jobs:
           | pbb-windows-x64-amd-zen3-avx2-REPLACE_VER.zip | AMD Zen3 / Ryzen 5000 同类；`-march=znver3`，AVX2 |
           | pbb-windows-x64-amd-zen4-avx512-REPLACE_VER.zip | AMD Zen4 / Hawk Point，覆盖 8845HS 等；`-march=znver4`，AVX-512 |
           | pbb-windows-x64-amd-zen5-avx512-REPLACE_VER.zip | AMD Zen5 / Zen5c / Fire Range，覆盖 Ryzen AI 9、9955HX3D；`-march=znver5`，AVX-512 |
+          | pbb-windows-x64-universal-REPLACE_VER.zip | 通用版本，所有 x86-64 Windows；`-march=x86-64`，无 SIMD |
           EOF
           sed -i "s/REPLACE_VER/${{ steps.version.outputs.version }}/g" release_body.md
 
