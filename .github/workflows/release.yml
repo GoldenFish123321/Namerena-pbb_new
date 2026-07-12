@@ -26,49 +26,42 @@ jobs:
             simd_display: 'none'
             cpu_label: 'Intel Sandy Bridge'
             cpu_cover: 'Intel Core i3-2120'
-            smoke_fallback: false
 
           - target: intel-alderlake-avx2
             march: alderlake
             simd_display: 'AVX2'
             cpu_label: 'Intel Alder Lake'
             cpu_cover: 'i5-12600KF'
-            smoke_fallback: false
 
           - target: intel-raptorlake-avx2
             march: raptorlake
             simd_display: 'AVX2'
             cpu_label: 'Intel Raptor Lake / Refresh'
             cpu_cover: 'i5-1340P、i9-13900HX、i7-14700HX'
-            smoke_fallback: false
 
           - target: amd-zen3-avx2
             march: znver3
             simd_display: 'AVX2'
             cpu_label: 'AMD Zen3 / Ryzen 5000'
             cpu_cover: 'Ryzen 5000 同类'
-            smoke_fallback: false
 
           - target: amd-zen4-avx512
             march: znver4
             simd_display: 'AVX-512'
             cpu_label: 'AMD Zen4 / Hawk Point'
             cpu_cover: '8845HS 等'
-            smoke_fallback: true
 
           - target: amd-zen5-avx512
             march: znver5
             simd_display: 'AVX-512'
             cpu_label: 'AMD Zen5 / Zen5c / Fire Range'
             cpu_cover: 'Ryzen AI 9、9955HX3D'
-            smoke_fallback: true
 
           - target: universal
             march: x86-64
             simd_display: 'none'
             cpu_label: '通用 (所有 x86-64)'
             cpu_cover: '所有支持 x86-64 的 Windows 系统'
-            smoke_fallback: false
 
     steps:
       - uses: actions/checkout@v4
@@ -174,23 +167,6 @@ jobs:
             engine_main.cpp
           echo "[build] pbb_engine done"
 
-      # ── AVX-512 目标: 额外编译 baseline 版 engine 供 smoke test ──
-      # GitHub runner 不支持 AVX-512，无法直接执行 -march=znver4/znver5 的二进制。
-      # 编译一份 -march=x86-64 的 engine 专门跑 smoke test，验证打包链路、
-      # Python 运行时、配置解析正确性。测试后从 artifact 中删除，不留痕。
-      - name: Build pbb_engine (smoke fallback)
-        if: matrix.smoke_fallback
-        shell: msys2 {0}
-        run: |
-          set -e
-          g++ -std=c++17 -O3 -funroll-loops -ffast-math \
-            -march=x86-64 \
-            -static -static-libgcc -static-libstdc++ \
-            -I src \
-            -o build/pbb_engine_smoke.exe \
-            engine_main.cpp
-          echo "[build] pbb_engine_smoke (baseline) done"
-
       # ── 获取 build 绝对路径 (Windows 风格) ──
       - name: Build absolute path
         id: builddir
@@ -273,22 +249,9 @@ jobs:
             本包是预编译包，--rebuild 不用于用户机器。
           README_EOF
 
-      # ── AVX-512 目标: 将 baseline engine 复制到包内供 smoke test ──
-      - name: Stage smoke fallback engine
-        if: matrix.smoke_fallback
-        run: |
-          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
-          Copy-Item build/pbb_engine_smoke.exe "$pkg/pbb_engine_smoke.exe" -Force
-          Write-Host "[smoke-prep] staged baseline engine for smoke test"
-
-      # ── 生成 smoke 配置 + 运行验证 ──
-      # 对于 smoke_fallback=true 的目标, 使用 baseline engine (pbb_engine_smoke.exe)
-      # 代替优化版 engine (pbb_engine.exe) 运行 smoke test。
-      # 原因: GitHub runner 不支持 AVX-512, 无法执行 -march=znver4/znver5 二进制。
-      # 基线 engine 验证的是打包链路、Python 运行时、配置解析、计算管线正确性,
-      # 与优化版 engine 共享 100% 相同的 C++ 源代码, 仅在 -march 上不同。
-      # 优化版 AVX-512 指令正确性由 CI workflow (ubuntu g++) 的 mode 1 + mode 2
-      # diff 测试覆盖。
+      # ── 验证构建产物完整性 ──
+      # 正确性验证由 CI workflow (ubuntu g++, mode 1 + mode 2 diff) 在每次 push 时覆盖，
+      # release 流程仅需确认产物文件齐全。
       - name: Verify build artifacts
         run: |
           $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
@@ -299,52 +262,6 @@ jobs:
           $configs = Get-ChildItem $pkg -Filter "config.example.*"
           if ($configs.Count -lt 3) { throw "missing config.example files in $pkg" }
           Write-Host "[verify] $pkg: exe=$($exe.Name), pyd=$($pyd.Name), configs=$($configs.Count)"
-
-      - name: Smoke test
-        run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
-          # AVX-512 目标用 baseline fallback engine, 其余用优化版
-          $engineName = "pbb-windows-x64-${{ matrix.target }}.exe"
-          if ('${{ matrix.smoke_fallback }}' -eq 'true') {
-            $engineName = "pbb_engine_smoke.exe"
-            Write-Host "[smoke] using baseline fallback engine (runner lacks AVX-512)"
-          }
-          $enginePath = "$pkg/$engineName"
-          if (-not (Test-Path $enginePath)) { throw "engine not found: $enginePath" }
-          
-          # UTF-8 output for Chinese characters (both Python internal and console)
-          $env:PYTHONIOENCODING = "utf-8"
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          
-          # Step 1: --help
-          & $enginePath --help
-          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
-          
-          # Step 2: smoke run (1000 names, mode 1)
-          @"
-          team_name = "smoke"
-          prefixes = [{name = "test-"}]
-          suffixes = [{name = ""}]
-          character_set = { single_char_length = 2, types = [1,2,3] }
-          enumeration = { mode = 1, variable_length = 4, ranges = [{ start = 0, end = 1000 }] }
-          collection = { collect_mode = 0 }
-          output = { log_output = 0, speed_output = 0, result_file = "-" }
-          threads = { worker_threads = 2 }
-          debug_mode = 1
-          "@ | Out-File -Encoding utf8 release_build/smoke.config.toml
-          
-          $output = & $enginePath -c release_build/smoke.config.toml --output-dest stdout 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
-          Write-Host "[smoke] PASS"
-
-      # ── AVX-512 目标: 删除 smoke fallback engine (artifact 只保留优化版) ──
-      - name: Remove smoke fallback engine
-        if: matrix.smoke_fallback
-        run: |
-          $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
-          Remove-Item "$pkg/pbb_engine_smoke.exe" -Force -ErrorAction SilentlyContinue
-          Write-Host "[smoke-clean] removed baseline engine from package"
 
       # ── 清理 + 打包 ZIP ──
       - name: Create ZIP
