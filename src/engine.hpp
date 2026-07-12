@@ -21,7 +21,7 @@
 
 // ===== 候选交错宽度 (Issue #17 扩展实验) =====
 // 2=双路(默认) 3=三路交错 4=四路交错
-#define PAIR_WIDTH 2
+#define PAIR_WIDTH 4
 #include <random>
 #include <chrono>
 #include <atomic>
