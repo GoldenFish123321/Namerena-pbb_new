@@ -42,3 +42,5 @@ tmp_*
 !config.example.json
 !config.example.yaml
 !config.example.toml
+!test.config.json
+!test-mode2.config.json

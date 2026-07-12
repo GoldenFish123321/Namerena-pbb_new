@@ -281,6 +281,10 @@ def _build_task_config(cfg: dict) -> dict:
     # result_file: 优先 CONFIG_MAP 默认 "result.txt"
     tc["result_file"] = tc.get("result_file", "result.txt")
 
+    # seed: 可选, 从配置文件读取 (CLI --seed 在 _build_task_config 之后覆盖)
+    if "seed" in cfg:
+        tc["seed"] = cfg["seed"]
+
     return tc
 
 

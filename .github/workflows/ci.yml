@@ -17,10 +17,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq g++ python3-venv
 
-      - name: Build & smoke test
+      - name: Mode 1 — sequential
         run: |
-          ./run.sh -y -c test-ci.config 2>&1
+          ./run.sh -y -c test.config.json 2>&1
 
-      - name: Diff against expected output
+      - name: Diff mode 1
         run: |
           diff <(sort out/ci-result) test-ci-expect-result.txt
+
+      - name: Mode 2 — random (seeded)
+        run: |
+          ./run.sh -y -c test-mode2.config.json 2>&1
+
+      - name: Diff mode 2
+        run: |
+          diff <(sort out/ci-result-mode2) test-mode2-expect-result.txt
