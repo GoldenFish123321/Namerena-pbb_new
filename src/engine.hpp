@@ -375,13 +375,17 @@ inline int engine_main(int argc,char**argv){
 #elif PAIR_WIDTH == 4
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
                               int epre,int evar,uint64_t L,uint64_t R){
+            int vary_start = nlen - scl;  // 变化字节范围起始 (仅最低位 scl 字节不同)
             for(uint64_t i=L;i+3<R;i+=4){
                 uint64_t now;
                 now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
                 now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
                 now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
                 now=i+3;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(d+p,ci);now/=clen;}
-                na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
+                if (i % clen + 3 < clen)
+                    na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
+                else
+                    na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
                 process_one(a,nlen,score_full(a,nlen,na));
                 process_one(b,nlen,score_full(b,nlen,nb));
                 process_one(c,nlen,score_full(c,nlen,nc));
