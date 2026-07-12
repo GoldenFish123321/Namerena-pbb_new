@@ -332,22 +332,34 @@ inline int engine_main(int argc,char**argv){
                 if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
-        // ---- 编码 helper: 顺序进位 — 多候选交错 KSA (Issue #17 扩展) ----
+        // ---- 编码 helper: 顺序进位 — 进位增量 (消除 % 和 / 除法, P4) ----
+        // 仅 L 做一次全除法; 后续名字用进位增量 (O(1) 均摊, 代替 O(vlen) 除法)
 #if PAIR_WIDTH == 2
         auto consume_seq=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
                               int epre,int evar,uint64_t L,uint64_t R){
-            for(uint64_t i=L;i+1<R;i+=2){
-                uint64_t now=i;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
-                now=i+1;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_b+pos,ci);now/=clen;}
+            uint8_t d[16];  // 当前数字位值 (小端: d[0]=最低位)
+            // 初始编码 L
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){d[p]=now%clen;ENC(buf_a+epre+p*scl,d[p]);now/=clen;}}
+            uint64_t remain=R-L;
+            while(remain>=2){
+                // buf_b = buf_a + 1 (进位增量)
+                memcpy(buf_b+epre,buf_a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){
+                    if(++d[p]<(unsigned)clen){ENC(buf_b+epre+p*scl,d[p]);break;}
+                    d[p]=0;ENC(buf_b+epre+p*scl,0);
+                }
                 na.load_name_pair(buf_a,buf_b,nlen,nb);
                 process_one(buf_a,nlen,score_full(buf_a,nlen,na));
                 process_one(buf_b,nlen,score_full(buf_b,nlen,nb));
+                // buf_a = buf_b + 1 (再进一位, 准备下一对)
+                memcpy(buf_a+epre,buf_b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){
+                    if(++d[p]<(unsigned)clen){ENC(buf_a+epre+p*scl,d[p]);break;}
+                    d[p]=0;ENC(buf_a+epre+p*scl,0);
+                }
+                remain-=2;
             }
-            if((R-L)%2==1){
-                uint64_t i=R-1,now=i;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
+            if(remain){  // 奇数余数: buf_a 已是 R-1
                 process_one(buf_a,nlen,score_full(buf_a,nlen,na));
             }
         };
