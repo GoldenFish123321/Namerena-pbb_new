@@ -382,6 +382,7 @@ inline int engine_main(int argc,char**argv){
                 now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
                 now=i+3;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(d+p,ci);now/=clen;}
                 na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
+                na.finish_load_quad(nb, nc, nd);
                 process_one(a,nlen,score_full(a,nlen,na));
                 process_one(b,nlen,score_full(b,nlen,nb));
                 process_one(c,nlen,score_full(c,nlen,nc));
@@ -440,6 +441,7 @@ inline int engine_main(int argc,char**argv){
                 for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(c+p,ci);}
                 for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(d+p,ci);}
                 na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
+                na.finish_load_quad(nb, nc, nd);
                 process_one(a,nlen,score_full(a,nlen,na));
                 process_one(b,nlen,score_full(b,nlen,nb));
                 process_one(c,nlen,score_full(c,nlen,nc));
