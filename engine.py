@@ -95,8 +95,8 @@ def _build_params(config: dict, charset_hex: str, result_file: str = "result.txt
     # prefix/suffix CSV — 保留原始内容 (包括前后空格), "+"/"" 映射为空
     pfx = config.get("prefixes", "")
     sfx = config.get("suffixes", "")
-    if isinstance(pfx, list): pfx = ",".join("" if x == "+" or x == "" else x for x in pfx)
-    if isinstance(sfx, list): sfx = ",".join("" if x == "+" or x == "" else x for x in sfx)
+    if isinstance(pfx, list): pfx = "\x01".join("" if x == "+" or x == "" else x for x in pfx)
+    if isinstance(sfx, list): sfx = "\x01".join("" if x == "+" or x == "" else x for x in sfx)
     if not pfx: pfx = ""
     if not sfx: sfx = ""
 

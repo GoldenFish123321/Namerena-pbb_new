@@ -276,8 +276,8 @@ def _build_task_config(cfg: dict) -> dict:
         # 校验已在 _validate_config 做过, 此处防御
         if idx != total_pfx:
             _die(f"prefix_ranges count 总和 ({idx}) != 前缀总数 ({total_pfx})")
-        tc["prefix_range_L"] = ",".join(range_L)
-        tc["prefix_range_R"] = ",".join(range_R)
+        tc["prefix_range_L"] = "\x01".join(range_L)
+        tc["prefix_range_R"] = "\x01".join(range_R)
 
     # result_file: 优先 CONFIG_MAP 默认 "result.txt"
     tc["result_file"] = tc.get("result_file", "result.txt")

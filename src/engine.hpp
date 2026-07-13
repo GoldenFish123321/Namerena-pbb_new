@@ -95,7 +95,7 @@ static bool q_done(TaskQueue& q){std::unique_lock lk(q.mtx);return q.closed&&q.h
 static std::string hex_decode(const std::string& h){std::string o;for(size_t i=0;i+1<h.length();i+=2){int hi=h[i]>='a'?h[i]-'a'+10:h[i]>='A'?h[i]-'A'+10:h[i]-'0';int lo=h[i+1]>='a'?h[i+1]-'a'+10:h[i+1]>='A'?h[i+1]-'A'+10:h[i+1]-'0';o+=(char)((hi<<4)|lo);}return o;}
 
 // CSV 分割 (prefixes/suffixes 列表)
-static std::vector<std::string> split_csv(const std::string& s){std::vector<std::string> v;if(s.empty()){v.push_back("");return v;}std::string cur;for(char c:s){if(c==','){v.push_back(cur);cur.clear();}else cur+=c;}v.push_back(cur);return v;}
+static std::vector<std::string> split_csv(const std::string& s){std::vector<std::string> v;if(s.empty()){v.push_back("");return v;}std::string cur;for(char c:s){if(c=='\x01'){v.push_back(cur);cur.clear();}else cur+=c;}v.push_back(cur);return v;}
 
 // ===== 引擎入口 =====
 inline int engine_main(int argc,char**argv){
