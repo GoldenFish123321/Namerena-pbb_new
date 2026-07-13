@@ -730,7 +730,13 @@ inline int engine_main(int argc,char**argv){
             // 构建名字缓冲区: prefix + 占位 + suffix
             const std::string&p=prefixes[(t.prefix_id-1)%np];const std::string&s=suffixes[(t.suffix_id-1)%ns];
             int plen=(int)p.size(),slen=(int)s.size(),nlen=plen+vlen*scl+slen;
-            char buf[512];memcpy(buf,p.data(),plen);memset(buf+plen,0,vlen*scl);
+            char buf[512];
+            if(nlen+1>(int)sizeof(buf)){
+                fprintf(stderr,"[engine] ERROR: candidate name length %d exceeds buffer size %zu (prefix=%d, vlen=%d, scl=%d, suffix=%d)\n",
+                        nlen,sizeof(buf),plen,vlen,scl,slen);
+                continue;
+            }
+            memcpy(buf,p.data(),plen);memset(buf+plen,0,vlen*scl);
             if(slen)memcpy(buf+plen+vlen*scl,s.data(),slen);
             buf[nlen]=0;  // 修复: load_prefix/load_name 循环第一轮读 name[nlen], 与 pbb_all.cpp 全局零初始化对齐
             uint64_t L=t.L,R=t.R;
