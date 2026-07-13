@@ -123,8 +123,18 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== finish_V(): 从 name_base 计算 V 值 (纯标量, 供 finish_load 复用) =====
-  void finish_V() {
+  // ===== finish_load_name(): 融合 SIMD ual 计算 + name_base 过滤 + V 值计算 =====
+  // 融合优化: 消除 ual 中间数组的 store/reload (256 字节), 单次扫描完成 val→ual→filter
+  void finish_load_name() {
+    q_len = -1;
+#if PBB_HAS_AVX512 || PBB_HAS_AVX2
+    simd_mul_add_dual_filter(val, ual_skills, name_base, q_len, 30);
+#else
+    simd_mul_add_dual(val, ual, ual_skills);
+    for (int i = 0; i < N && q_len < 30; i++)
+      if (ual[i] >= 89 && ual[i] < 217)
+        name_base[++q_len] = ual[i] & 63;
+#endif
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
@@ -138,13 +148,6 @@ struct alignas(64) Name {
     if (V < 250) return;
     sort10(name_base);
     V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
-  }
-
-  // ===== finish_load(): KSA 后的公共收尾 (ual/V 计算) =====
-  void finish_load() {
-    simd_mul_add_dual(val, ual, ual_skills);
-    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD: 到位掩码迭代, 消除逐字节分支
-    finish_V();
   }
 
   void load_name(const char *name, int name_len_hint = 0) {
@@ -165,7 +168,7 @@ struct alignas(64) Name {
       }
     }
     _ksa_done = false;
-    finish_load();
+    finish_load_name();
   }
 
   // ===== load_name_pair(): 双候选交错 RC4 KSA (Issue #17 方向一) =====
@@ -660,8 +663,14 @@ struct alignas(64) Name {
         s += val[i];
         std::swap(val[i], val[s]);
       }
+#if PBB_HAS_AVX512 || PBB_HAS_AVX2
+    simd_mul_add_filter(val, name_base, q_len, 30);
+#else
     simd_mul_add(val, ual, 181, 160);
-    simd_filter_range_attr(ual, name_base, q_len, 30);  // SIMD 过滤: 替换逐字节分支
+    for (int i = 0; i < N && q_len < 30; i++)
+      if (ual[i] >= 89 && ual[i] < 217)
+        name_base[++q_len] = ual[i] & 63;
+#endif
     V = 0;
     V += median(name_base[10], name_base[11], name_base[12]);
     V += median(name_base[13], name_base[14], name_base[15]);

@@ -98,6 +98,74 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
   }
 }
 
+// ===== 融合 SIMD: ual 计算 + name_base 过滤, 消除中间数组 ual 的 store/reload ====
+static inline void simd_mul_add_dual_filter(const u8_t* __restrict__ val,
+                                             u8_t* __restrict__ ual_skill,
+                                             u8_t* __restrict__ name_base,
+                                             int& q_len, int max_len) {
+  const __m512i vmul  = _mm512_set1_epi16(181);
+  const __m512i vaddA = _mm512_set1_epi16(160);
+  const __m512i vaddS = _mm512_set1_epi16(71);
+  const __m512i vmask = _mm512_set1_epi16(0xFF);
+  const __m512i vzero = _mm512_setzero_si512();
+  const __m512i v89  = _mm512_set1_epi8(89);
+  const __m512i v217 = _mm512_set1_epi8(217);
+  for (int i = 0; i < 256; i += 64) {
+    __m512i v = _mm512_loadu_si512((const __m512i*)&val[i]);
+    __m512i lo = _mm512_unpacklo_epi8(v, vzero);
+    __m512i hi = _mm512_unpackhi_epi8(v, vzero);
+    __m512i loA = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddA);
+    __m512i hiA = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddA);
+    __m512i loS = _mm512_add_epi16(_mm512_mullo_epi16(lo, vmul), vaddS);
+    __m512i hiS = _mm512_add_epi16(_mm512_mullo_epi16(hi, vmul), vaddS);
+    loA = _mm512_and_si512(loA, vmask); hiA = _mm512_and_si512(hiA, vmask);
+    loS = _mm512_and_si512(loS, vmask); hiS = _mm512_and_si512(hiS, vmask);
+    _mm512_storeu_si512((__m512i*)&ual_skill[i], _mm512_packus_epi16(loS, hiS));
+    if (q_len < max_len) {
+      __m512i attr = _mm512_packus_epi16(loA, hiA);
+      __mmask64 ge = _mm512_cmpge_epu8_mask(attr, v89);
+      __mmask64 lt = _mm512_cmplt_epu8_mask(attr, v217);
+      __mmask64 mask = ge & lt;
+      while (mask && q_len < max_len) {
+        int idx = _tzcnt_u64(mask);
+        name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
+        mask &= mask - 1;
+      }
+    }
+  }
+}
+
+static inline void simd_mul_add_filter(const u8_t* __restrict__ val,
+                                        u8_t* __restrict__ name_base,
+                                        int& q_len, int max_len) {
+  const __m512i vmul  = _mm512_set1_epi16(181);
+  const __m512i vadd  = _mm512_set1_epi16(160);
+  const __m512i vmask = _mm512_set1_epi16(0xFF);
+  const __m512i vzero = _mm512_setzero_si512();
+  const __m512i v89  = _mm512_set1_epi8(89);
+  const __m512i v217 = _mm512_set1_epi8(217);
+  for (int i = 0; i < 256; i += 64) {
+    __m512i v = _mm512_loadu_si512((const __m512i*)&val[i]);
+    __m512i lo = _mm512_unpacklo_epi8(v, vzero);
+    __m512i hi = _mm512_unpackhi_epi8(v, vzero);
+    lo = _mm512_mullo_epi16(lo, vmul);
+    hi = _mm512_mullo_epi16(hi, vmul);
+    lo = _mm512_add_epi16(lo, vadd);
+    hi = _mm512_add_epi16(hi, vadd);
+    lo = _mm512_and_si512(lo, vmask);
+    hi = _mm512_and_si512(hi, vmask);
+    __m512i attr = _mm512_packus_epi16(lo, hi);
+    __mmask64 ge = _mm512_cmpge_epu8_mask(attr, v89);
+    __mmask64 lt = _mm512_cmplt_epu8_mask(attr, v217);
+    __mmask64 mask = ge & lt;
+    while (mask && q_len < max_len) {
+      int idx = _tzcnt_u64(mask);
+      name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
+      mask &= mask - 1;
+    }
+  }
+}
+
 #elif PBB_HAS_AVX2
 // ---- AVX2: 8 次迭代覆盖 256 字节 ----
 static inline void simd_mul_add(const u8_t* __restrict__ val, u8_t* __restrict__ ual,
@@ -141,6 +209,80 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
     loS = _mm256_and_si256(loS, vmask);  hiS = _mm256_and_si256(hiS, vmask);
     _mm256_storeu_si256((__m256i*)&ual_attr[i], _mm256_packus_epi16(loA, hiA));
     _mm256_storeu_si256((__m256i*)&ual_skill[i], _mm256_packus_epi16(loS, hiS));
+  }
+}
+
+// ===== 融合 SIMD: ual 计算 + name_base 过滤, 消除中间数组 ual 的 store/reload ====
+static inline void simd_mul_add_dual_filter(const u8_t* __restrict__ val,
+                                             u8_t* __restrict__ ual_skill,
+                                             u8_t* __restrict__ name_base,
+                                             int& q_len, int max_len) {
+  const __m256i vmul  = _mm256_set1_epi16(181);
+  const __m256i vaddA = _mm256_set1_epi16(160);
+  const __m256i vaddS = _mm256_set1_epi16(71);
+  const __m256i vmask = _mm256_set1_epi16(0xFF);
+  const __m256i vzero = _mm256_setzero_si256();
+  const __m256i v88  = _mm256_set1_epi8(88);
+  const __m256i v217 = _mm256_set1_epi8(217);
+  const __m256i vones = _mm256_cmpeq_epi8(vzero, vzero);
+  for (int i = 0; i < 256; i += 32) {
+    __m256i v = _mm256_loadu_si256((const __m256i*)&val[i]);
+    __m256i lo = _mm256_unpacklo_epi8(v, vzero);
+    __m256i hi = _mm256_unpackhi_epi8(v, vzero);
+    __m256i loA = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddA);
+    __m256i hiA = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddA);
+    __m256i loS = _mm256_add_epi16(_mm256_mullo_epi16(lo, vmul), vaddS);
+    __m256i hiS = _mm256_add_epi16(_mm256_mullo_epi16(hi, vmul), vaddS);
+    loA = _mm256_and_si256(loA, vmask);  hiA = _mm256_and_si256(hiA, vmask);
+    loS = _mm256_and_si256(loS, vmask);  hiS = _mm256_and_si256(hiS, vmask);
+    _mm256_storeu_si256((__m256i*)&ual_skill[i], _mm256_packus_epi16(loS, hiS));
+    if (q_len < max_len) {
+      __m256i attr = _mm256_packus_epi16(loA, hiA);
+      __m256i ge = _mm256_subs_epu8(attr, v88);
+      __m256i lt = _mm256_subs_epu8(v217, attr);
+      __m256i ge_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(ge, vzero), vones);
+      __m256i lt_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(lt, vzero), vones);
+      unsigned mask = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_mask, lt_mask));
+      while (mask && q_len < max_len) {
+        int idx = _tzcnt_u32(mask);
+        name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
+        mask &= mask - 1;
+      }
+    }
+  }
+}
+
+static inline void simd_mul_add_filter(const u8_t* __restrict__ val,
+                                        u8_t* __restrict__ name_base,
+                                        int& q_len, int max_len) {
+  const __m256i vmul  = _mm256_set1_epi16(181);
+  const __m256i vadd  = _mm256_set1_epi16(160);
+  const __m256i vmask = _mm256_set1_epi16(0xFF);
+  const __m256i vzero = _mm256_setzero_si256();
+  const __m256i v88  = _mm256_set1_epi8(88);
+  const __m256i v217 = _mm256_set1_epi8(217);
+  const __m256i vones = _mm256_cmpeq_epi8(vzero, vzero);
+  for (int i = 0; i < 256; i += 32) {
+    __m256i v = _mm256_loadu_si256((const __m256i*)&val[i]);
+    __m256i lo = _mm256_unpacklo_epi8(v, vzero);
+    __m256i hi = _mm256_unpackhi_epi8(v, vzero);
+    lo = _mm256_mullo_epi16(lo, vmul);
+    hi = _mm256_mullo_epi16(hi, vmul);
+    lo = _mm256_add_epi16(lo, vadd);
+    hi = _mm256_add_epi16(hi, vadd);
+    lo = _mm256_and_si256(lo, vmask);
+    hi = _mm256_and_si256(hi, vmask);
+    __m256i attr = _mm256_packus_epi16(lo, hi);
+    __m256i ge = _mm256_subs_epu8(attr, v88);
+    __m256i lt = _mm256_subs_epu8(v217, attr);
+    __m256i ge_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(ge, vzero), vones);
+    __m256i lt_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(lt, vzero), vones);
+    unsigned mask = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_mask, lt_mask));
+    while (mask && q_len < max_len) {
+      int idx = _tzcnt_u32(mask);
+      name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
+      mask &= mask - 1;
+    }
   }
 }
 
