@@ -190,6 +190,7 @@ jobs:
             --workpath release_build\pyinstaller-work ^
             --specpath release_build ^
             --paths "%BUILD_ABS%" ^
+            --exclude-module pbb_core ^
             --add-data "%BUILD_ABS%;build" ^
             --hidden-import tomllib ^
             --hidden-import tomli ^
@@ -235,10 +236,7 @@ jobs:
           使用方法：
             1. 从三个 config.example.* 中任选一种复制为 config.json / config.toml / config.yaml。
             2. 修改配置里的 team_name、prefixes、suffixes、character_set、enumeration、collection、threads 等字段。
-            3. 运行：
-                 pbb-windows-x64-${{ matrix.target }}.exe -c config.toml
-               或：
-                 run.bat -c config.toml
+            3. 运行：pbb-windows-x64-${{ matrix.target }}.exe -c config.toml
             4. 不指定 -c 时，程序会依次尝试 config.json、config.yaml、config.toml。
             5. 结果默认写入 out/。
 
@@ -250,8 +248,28 @@ jobs:
             pbb-windows-x64-${{ matrix.target }}.exe -c config.toml --output-dest both -o result.txt
             pbb-windows-x64-${{ matrix.target }}.exe --help
 
+          命令行参数说明：
+            --threads       覆盖 threads.worker_threads，-1 为自动检测核心数。
+            --team          覆盖 team_name。
+            --mode          覆盖 enumeration.mode，1=顺序，2/3/4=随机模式。
+            --vlen          覆盖 enumeration.variable_length。
+            --range-start   覆盖 enumeration.ranges[0].start。
+            --range-end     覆盖 enumeration.ranges[0].end。
+            --xp-min        覆盖 collection.xp_min。
+            --xd-min        覆盖 collection.xd_min。
+            --collect-mode  覆盖 collection.collect_mode。
+            --output-xp     覆盖 output.output_xp。
+            -o              覆盖 output.result_file，+ 为随机名，- 为时间戳。
+            --output-dest   输出目标：file、stdout、both。
+            --debug         启用引擎诊断输出。
+            --seed          随机模式种子，用于复现结果。
+            --scl           覆盖 character_set.single_char_length。
+            --types         覆盖 character_set.types，逗号分隔。
+            --custom-values 覆盖 character_set.custom_values。
+
           注意：
-            本包是预编译包，--rebuild 不用于用户机器。
+            本包是预编译包，不需要用户安装 Python 或 C++ 编译器。
+            --rebuild 不用于预编译发布包。
           README_EOF
 
       # ── 验证构建产物完整性 ──
@@ -277,8 +295,10 @@ jobs:
         run: |
           $ver = "${{ steps.version.outputs.version }}"
           $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
+          $dest = "release/pbb-windows-x64-${{ matrix.target }}-${ver}"
+          Rename-Item $pkg $dest
           $zip = "release/pbb-windows-x64-${{ matrix.target }}-${ver}.zip"
-          Compress-Archive -Path "$pkg\*" -DestinationPath $zip -Force
+          Compress-Archive -Path "$dest" -DestinationPath $zip -Force
           if (-not (Test-Path $zip)) { throw "ZIP creation failed: $zip" }
           Write-Host "[release] ZIP: $zip"
 
