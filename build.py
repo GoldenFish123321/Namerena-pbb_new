@@ -526,12 +526,48 @@ def _compile_pbb_core(verbose=False):
     sys.exit(1)
 
 
+def _detect_pair_width() -> int:
+    """Detect optimal PAIR_WIDTH based on CPU microarchitecture.
+
+    Returns:
+        2 for ARM (in-order CPUs like Cortex-A55 can't handle more),
+        5 for x86 Golden Cove / Zen4 / Zen5 (large ROB),
+        4 for other x86 (default safe value).
+    """
+    import platform
+    machine = platform.machine()
+    if machine.startswith("aarch") or machine.startswith("arm"):
+        return 2
+
+    # Try /proc/cpuinfo on Linux
+    if sys.platform != "win32":
+        try:
+            with open("/proc/cpuinfo") as f:
+                info = f.read().lower()
+                # Intel Golden Cove: 12th/13th/14th Gen, Core Ultra (Arrow Lake)
+                if any(kw in info for kw in ["12th gen", "13th gen", "14th gen",
+                                              "core ultra", "core  ultra"]):
+                    return 5
+                # AMD Zen4 (Ryzen 7xxx/8xxx) and Zen5 (Ryzen 9xxx)
+                if "amd" in info:
+                    import re
+                    m = re.search(r"ryzen\s+(\d)", info)
+                    if m and int(m.group(1)) >= 7:
+                        return 5
+        except Exception:
+            pass
+
+    return 4  # default safe value
+
+
 def _compile_engine(verbose=False):
     """Compile engine_main.cpp → pbb_engine. Tries compilers in priority order."""
     compilers = _find_compilers(verbose)
     if not compilers:
         print("ERROR: No C++ compiler found", file=sys.stderr)
         sys.exit(1)
+
+    pair_width = _detect_pair_width()
 
     os.makedirs(BUILD_DIR, exist_ok=True)
     src = os.path.join(BASE_DIR, "engine_main.cpp")
@@ -543,13 +579,16 @@ def _compile_engine(verbose=False):
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
 
+        # Add PAIR_WIDTH based on CPU microarchitecture
+        flags = flags + [f"-DPAIR_WIDTH={pair_width}"]
+
         # PBB_CXXFLAGS 环境变量: 覆盖自动检测的 flags
         overrides = _cxxflags_override("engine", name, flags, simd_name, verbose)
 
         cmd = _compile(name, overrides, is_msvc, src, out, extra_includes=includes)
         if verbose:
             print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
-        print(f"[build] engine: {name} ({simd_name})", file=sys.stderr)
+        print(f"[build] engine: {name} ({simd_name}, PAIR_WIDTH={pair_width})", file=sys.stderr)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return
