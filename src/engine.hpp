@@ -350,57 +350,65 @@ inline int engine_main(int argc,char**argv){
                 if(blue){std::lock_guard lk(out_mtx);fprintf(fp_blue,"%.*s@%s\n",nlen,buf,team.c_str());fflush(fp_blue);}}
         };
 
-        // ---- 编码 helper: 顺序进位 — 多候选交错 KSA (Issue #17 扩展) ----
+        // ---- 编码 helper: 顺序进位 — 进位增量 (消除 %,/ 除法) + 多候选交错 KSA ----
+        // 仅第一个候选 L 做全除法; 后续候选用进位增量 (低位+1, 溢出则向高位进位), 均摊 O(1) 代替 O(vlen) 除法
+        // dig[evar-1]=最低位(pos=epre+(evar-1)*scl), dig[0]=最高位(pos=epre)
 #if PAIR_WIDTH == 2
-        auto consume_seq=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,
+        auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,
                               int epre,int evar,uint64_t L,uint64_t R){
+            uint8_t dig[16];
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+1<R;i+=2){
-                uint64_t now=i;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
-                now=i+1;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_b+pos,ci);now/=clen;}
-                na.load_name_pair(buf_a,buf_b,nlen,nb);
-                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
-                process_one(buf_b,nlen,score_full(buf_b,nlen,nb));
+                memcpy(b+epre,a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
+                na.load_name_pair(a,b,nlen,nb);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                memcpy(a+epre,b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}
             }
             if((R-L)%2==1){
-                uint64_t i=R-1,now=i;
-                for(int pos=epre+evar*scl-scl;pos>=epre;pos-=scl){int ci=now%clen;ENC(buf_a+pos,ci);now/=clen;}
-                process_one(buf_a,nlen,score_full(buf_a,nlen,na));
+                process_one(a,nlen,score_full(a,nlen,na));
             }
         };
 #elif PAIR_WIDTH == 3
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
                               int epre,int evar,uint64_t L,uint64_t R){
+            uint8_t dig[16];
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+2<R;i+=3){
-                uint64_t now;
-                now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
-                now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
+                memcpy(b+epre,a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
+                memcpy(c+epre,b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(c+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(c+epre+p*scl,0);}
                 na.load_name_triple(a,b,c,nlen,nb,nc);
                 process_one(a,nlen,score_full(a,nlen,na));
                 process_one(b,nlen,score_full(b,nlen,nb));
                 process_one(c,nlen,score_full(c,nlen,nc));
+                memcpy(a+epre,c+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}
             }
-            // 尾块: fallback 到单路 load_name — 重置 _ksa_done 强制全 KSA
             for(uint64_t i=L+((R-L)/3)*3;i<R;i++){
-                uint64_t now=i;
-                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                na._ksa_done = false; na.load_name(a,nlen);
+                na._ksa_done=false;na.load_name(a,nlen);
                 process_one(a,nlen,score_full(a,nlen,na));
+                if(i+1<R){for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}}
             }
         };
 #elif PAIR_WIDTH == 4
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
                               int epre,int evar,uint64_t L,uint64_t R){
-            int vary_start = nlen - scl;  // 变化字节范围起始 (仅最低位 scl 字节不同)
+            int vary_start = nlen - scl;
+            uint8_t dig[16];
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+3<R;i+=4){
-                uint64_t now;
-                now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
-                now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
-                now=i+3;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(d+p,ci);now/=clen;}
-                if (i % clen + 3 < clen)
+                bool can_shared = dig[evar-1]+3 < (unsigned)clen;
+                memcpy(b+epre,a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
+                memcpy(c+epre,b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(c+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(c+epre+p*scl,0);}
+                memcpy(d+epre,c+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(d+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(d+epre+p*scl,0);}
+                if(can_shared)
                     na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
                 else
                     na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
@@ -408,26 +416,32 @@ inline int engine_main(int argc,char**argv){
                 process_one(b,nlen,score_full(b,nlen,nb));
                 process_one(c,nlen,score_full(c,nlen,nc));
                 process_one(d,nlen,score_full(d,nlen,nd));
+                memcpy(a+epre,d+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}
             }
             for(uint64_t i=L+((R-L)/4)*4;i<R;i++){
-                uint64_t now=i;
-                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                na._ksa_done = false; na.load_name(a,nlen);
+                na._ksa_done=false;na.load_name(a,nlen);
                 process_one(a,nlen,score_full(a,nlen,na));
+                if(i+1<R){for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}}
             }
         };
 #elif PAIR_WIDTH == 5
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,
                               int epre,int evar,uint64_t L,uint64_t R){
             int vary_start = nlen - scl;
+            uint8_t dig[16];
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+4<R;i+=5){
-                uint64_t now;
-                now=i;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                now=i+1;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(b+p,ci);now/=clen;}
-                now=i+2;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(c+p,ci);now/=clen;}
-                now=i+3;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(d+p,ci);now/=clen;}
-                now=i+4;for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(e+p,ci);now/=clen;}
-                if (i % clen + 4 < clen)
+                bool can_shared = dig[evar-1]+4 < (unsigned)clen;
+                memcpy(b+epre,a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
+                memcpy(c+epre,b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(c+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(c+epre+p*scl,0);}
+                memcpy(d+epre,c+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(d+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(d+epre+p*scl,0);}
+                memcpy(e+epre,d+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(e+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(e+epre+p*scl,0);}
+                if(can_shared)
                     na.load_name_quint_shared_key(a,b,c,d,e,nlen,vary_start,nb,nc,nd,ne);
                 else
                     na.load_name_quint(a,b,c,d,e,nlen,nb,nc,nd,ne);
@@ -436,12 +450,13 @@ inline int engine_main(int argc,char**argv){
                 process_one(c,nlen,score_full(c,nlen,nc));
                 process_one(d,nlen,score_full(d,nlen,nd));
                 process_one(e,nlen,score_full(e,nlen,ne));
+                memcpy(a+epre,e+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}
             }
             for(uint64_t i=L+((R-L)/5)*5;i<R;i++){
-                uint64_t now=i;
-                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=now%clen;ENC(a+p,ci);now/=clen;}
-                na._ksa_done = false; na.load_name(a,nlen);
+                na._ksa_done=false;na.load_name(a,nlen);
                 process_one(a,nlen,score_full(a,nlen,na));
+                if(i+1<R){for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}}
             }
         };
 #endif
