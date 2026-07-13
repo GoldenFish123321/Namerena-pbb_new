@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1
+
+### 性能
+
+- 进位增量编码替代除法 (`4414e1e`)：consume_seq 中仅首候选做除法，后续候选 memcpy + 进位增量，x86 +6.5%
+- SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
+- PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
+
+### 构建与发布
+
+- Release zip 修复 (`a1d0fe3`)：pbb_core.pyd 重复打包（省 ~2.9MB/包）、README 恢复命令行参数说明、zip 父目录包裹
+- Windows PAIR_WIDTH CPUID 检测 (`51eca29`)：Intel/AMD 现代 CPU 自动识别微架构
+
+### 修复
+
+- CSV 分隔符从逗号改为 SOH (`63d6268`)：前缀内含逗号时不再被误拆分
+
 ## 0.2.0
 
 感谢 [@spdc-elm](https://github.com/spdc-elm) 在 [#17](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/17) 中提出的系统性性能优化建议。
