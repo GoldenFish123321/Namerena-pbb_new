@@ -296,8 +296,8 @@ jobs:
           $ver = "${{ steps.version.outputs.version }}"
           $pkg = "release/pbb-windows-x64-${{ matrix.target }}"
           $dest = "release/pbb-windows-x64-${{ matrix.target }}-${ver}"
-          Rename-Item $pkg $dest
           $zip = "release/pbb-windows-x64-${{ matrix.target }}-${ver}.zip"
+          Move-Item -Path "$pkg" -Destination "$dest"
           Compress-Archive -Path "$dest" -DestinationPath $zip -Force
           if (-not (Test-Path $zip)) { throw "ZIP creation failed: $zip" }
           Write-Host "[release] ZIP: $zip"
