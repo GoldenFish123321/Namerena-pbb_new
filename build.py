@@ -132,6 +132,32 @@ def _cpu_has_vnni():
     return result
 
 
+def _cpu_has_avx512f():
+    """Check if host CPU supports AVX-512F (CPUID leaf 7, subleaf 0, EBX bit 16).
+
+    Unlike _compiler_probe which only checks if the compiler accepts -mavx512f,
+    this function directly queries the host CPU via CPUID/OS interfaces.
+    On Raptor Lake and newer Intel consumer CPUs, AVX-512 is fused off
+    and this function returns False even though the compiler accepts the flag.
+    """
+    try:
+        if sys.platform != "win32" and sys.platform != "darwin":
+            with open("/proc/cpuinfo") as f:
+                return "avx512f" in f.read().lower()
+        elif sys.platform == "darwin":
+            r = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.leaf7_features"],
+                capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace")
+            return r.returncode == 0 and "avx512f" in r.stdout.lower()
+        else:  # Windows
+            # CPUID leaf 7, subleaf 0, EBX bit 16 = AVX-512F
+            ebx = _cpuid_win(7, 0, "ebx")
+            return bool(ebx & (1 << 16))
+    except Exception:
+        return False
+
+
 def check_python():
     if sys.version_info < (3, 10):
         print("ERROR: Python 3.10+ required", file=sys.stderr)
@@ -216,24 +242,64 @@ def _detect_simd(compiler):
                     return (flags, name)
         except: pass
 
+    # Compiler probe fallback: verify host CPU supports the instruction set
+    # before accepting it. On Raptor Lake and newer Intel consumer CPUs,
+    # the compiler accepts -mavx512f but the CPU's AVX-512 is fused off.
     for flags, name in candidates:
+        if name == "AVX-512" and not _cpu_has_avx512f():
+            continue  # host CPU doesn't support AVX-512F — skip this candidate
         if _compiler_probe(compiler, flags[0]):
             return (flags, name)
 
     return ([], "none")
 
 
+def _is_amd_zen5():
+    """Check if host CPU is AMD Zen5 (Family 26) via CPUID.
+    
+    Returns True only if the host CPU is confirmed to be AMD Zen5.
+    This prevents -march=znver5 from being applied on Intel/non-Zen5 AMD CPUs.
+    """
+    try:
+        if sys.platform != "win32" and sys.platform != "darwin":
+            with open("/proc/cpuinfo") as f:
+                info = f.read().lower()
+            if "authenticamd" not in info:
+                return False
+            import re
+            m = re.search(r"cpu family\s*:\s*(\d+)", info)
+            return m and int(m.group(1)) == 26
+        elif sys.platform == "win32":
+            ebx0 = _cpuid_win(0, 0, "ebx") & 0xFFFFFFFF
+            if ebx0 != 0x68747541:         # "Auth" = AMD
+                return False
+            eax1 = _cpuid_win(1, 0, "eax")
+            base_family = (eax1 >> 8) & 0xF
+            ext_family  = (eax1 >> 20) & 0xFF
+            family = base_family
+            if base_family == 0xF:
+                family += ext_family
+            return family == 26            # Zen5
+    except Exception:
+        pass
+    return False
+
+
 def _gcc_arch_flags(compiler, verbose=False):
-    """Detect GCC -march support. znver5 for Zen5, fallback to native/generic."""
-    arch = "znver5"
-    flag = f"-march={arch}"
-    if _compiler_probe(compiler, flag):
-        return [flag], ", march=znver5"
+    """Detect GCC -march support. znver5 only for confirmed AMD Zen5 hosts."""
+    # Only attempt -march=znver5 if the host CPU is actually AMD Zen5.
+    # _compiler_probe alone is insufficient — it only checks if the compiler
+    # ACCEPTS the flag, not whether the host CPU is the right target.
+    if _is_amd_zen5():
+        flag = "-march=znver5"
+        if _compiler_probe(compiler, flag):
+            return [flag], ", march=znver5"
+        if verbose:
+            print(f"[build] WARNING: {compiler} 不支持 -march=znver5; 使用 -march=native",
+                  file=sys.stderr)
 
     fallback = "-march=native"
     if _compiler_probe(compiler, fallback):
-        if verbose:
-            print(f"[build] WARNING: {compiler} 不支持 {flag}; 使用 {fallback}", file=sys.stderr)
         return [fallback], ", march=native"
 
     if verbose:
@@ -272,7 +338,7 @@ def _find_compilers(verbose=False):
             # -xCORE-AVX2 is the only stable choice for both pbb_core and engine.
             flags = ["-std=c++17", "-w", "-O3", "-ipo", "-ffast-math",
                      "-funroll-loops", "-qopt-mem-layout-trans=4", "-qopt-prefetch=5",
-                     "-qopenmp", "-xCORE-AVX2"]
+                     "-xCORE-AVX2"]
             simd_label = "AVX2"
             # AVX-VNNI: both compiler AND CPU must support it
             if _compiler_probe(icpx, "-mavxvnni") and _cpu_has_vnni():
@@ -499,10 +565,14 @@ def _compile_pbb_core(verbose=False):
 
     all_errors = []  # accumulate all compiler errors, not just the last
     for name, flags, simd_name, is_msvc in compilers:
-        # MinGW g++ on Windows: static link runtime to avoid missing DLL errors
         extra_link = link[:]
+        # MinGW g++ on Windows: static link runtime to avoid missing DLL errors
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
+            extra_link = _mingw_python_link()
+        # icpx on Windows: MSVC /LIBPATH:python311.lib not understood by icpx linker.
+        # Use MinGW-compatible libpython via gendef+dlltool (same approach as g++).
+        elif sys.platform == "win32" and not is_msvc and "icpx" in str(name):
             extra_link = _mingw_python_link()
 
         # PBB_CXXFLAGS 环境变量: 覆盖自动检测的 flags
@@ -622,6 +692,10 @@ def _compile_engine(verbose=False):
     for name, flags, simd_name, is_msvc in compilers:
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
+
+        # icpx on Windows: OpenMP is needed by the engine (multi-threaded), but NOT by pbb_core
+        if sys.platform == "win32" and "icpx" in str(name):
+            flags = flags + ["-qopenmp"]
 
         # Add PAIR_WIDTH based on CPU microarchitecture
         flags = flags + [f"-DPAIR_WIDTH={pair_width}"]
