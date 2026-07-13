@@ -20,9 +20,10 @@
 #include <string>
 
 // ===== 候选交错宽度 (Issue #17 扩展实验) =====
-// 2=双路(默认) 3=三路交错 4=四路交错 5=五路交错
+// 2=双路(默认) 3=三路交错 4=四路交错 5=五路交错 6=六路交错
 // ARM Cortex-A55 (in-order): 四路寄存器压力过大 → spill → 退化, 二路最优 (+12.7%)
 // x86-64 (out-of-order): 五路可充分利用 Golden Cove/Zen4+ 的大 ROB 深度
+// 六路为超宽 ROB (Zen5+/Lion Cove+) 扩展实验，push ILP 极限
 // build.py 自动检测 CPU 微架构并通过 -DPAIR_WIDTH=N 传入, 未传入时用默认值
 #ifndef PAIR_WIDTH
 #ifdef __aarch64__
@@ -306,6 +307,9 @@ inline int engine_main(int argc,char**argv){
 #if PAIR_WIDTH >= 5
         Name name_e;
 #endif
+#if PAIR_WIDTH >= 6
+        Name name_f;
+#endif
         memcpy(name_a.val_base,name_init.val_base,sizeof(name_a.val_base));
         memcpy(name_b.val_base,name_init.val_base,sizeof(name_b.val_base));
 #if PAIR_WIDTH >= 3
@@ -317,6 +321,9 @@ inline int engine_main(int argc,char**argv){
 #if PAIR_WIDTH >= 5
         memcpy(name_e.val_base,name_init.val_base,sizeof(name_e.val_base));
 #endif
+#if PAIR_WIDTH >= 6
+        memcpy(name_f.val_base,name_init.val_base,sizeof(name_f.val_base));
+#endif
         char buf_b[512];
 #if PAIR_WIDTH >= 3
         char buf_c[512];
@@ -326,6 +333,9 @@ inline int engine_main(int argc,char**argv){
 #endif
 #if PAIR_WIDTH >= 5
         char buf_e[512];
+#endif
+#if PAIR_WIDTH >= 6
+        char buf_f[512];
 #endif
         TaskData t;
         int local_found=0,local_max_sum=0,local_max_xp=0,local_max_xd=0;
@@ -459,6 +469,43 @@ inline int engine_main(int argc,char**argv){
                 if(i+1<R){for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}}
             }
         };
+#elif PAIR_WIDTH == 6
+        auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,char* f,Name& nf,
+                              int epre,int evar,uint64_t L,uint64_t R){
+            int vary_start = nlen - scl;
+            uint8_t dig[16];
+            {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
+            for(uint64_t i=L;i+5<R;i+=6){
+                bool can_shared = dig[evar-1]+5 < (unsigned)clen;
+                memcpy(b+epre,a+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
+                memcpy(c+epre,b+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(c+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(c+epre+p*scl,0);}
+                memcpy(d+epre,c+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(d+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(d+epre+p*scl,0);}
+                memcpy(e+epre,d+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(e+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(e+epre+p*scl,0);}
+                memcpy(f+epre,e+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(f+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(f+epre+p*scl,0);}
+                if(can_shared)
+                    na.load_name_sextuple_shared_key(a,b,c,d,e,f,nlen,vary_start,nb,nc,nd,ne,nf);
+                else
+                    na.load_name_sextuple(a,b,c,d,e,f,nlen,nb,nc,nd,ne,nf);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+                process_one(d,nlen,score_full(d,nlen,nd));
+                process_one(e,nlen,score_full(e,nlen,ne));
+                process_one(f,nlen,score_full(f,nlen,nf));
+                memcpy(a+epre,f+epre,evar*scl);
+                for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}
+            }
+            for(uint64_t i=L+((R-L)/6)*6;i<R;i++){
+                na._ksa_done=false;na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+                if(i+1<R){for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(a+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(a+epre+p*scl,0);}}
+            }
+        };
 #endif
 
         // ---- 编码 helper: 随机逐位 — 多候选交错 KSA (Issue #17 扩展) ----
@@ -538,6 +585,30 @@ inline int engine_main(int argc,char**argv){
                 process_one(a,nlen,score_full(a,nlen,na));
             }
         };
+#elif PAIR_WIDTH == 6
+        auto consume_rand=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,char* f,Name& nf,
+                               int epre,int evar,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            for(uint64_t i=L;i+5<R;i+=6){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(b+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(c+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(d+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(e+p,ci);}
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(f+p,ci);}
+                na.load_name_sextuple(a,b,c,d,e,f,nlen,nb,nc,nd,ne,nf);
+                process_one(a,nlen,score_full(a,nlen,na));
+                process_one(b,nlen,score_full(b,nlen,nb));
+                process_one(c,nlen,score_full(c,nlen,nc));
+                process_one(d,nlen,score_full(d,nlen,nd));
+                process_one(e,nlen,score_full(e,nlen,ne));
+                process_one(f,nlen,score_full(f,nlen,nf));
+            }
+            for(uint64_t i=L+((R-L)/6)*6;i<R;i++){
+                for(int p=epre+evar*scl-scl;p>=epre;p-=scl){int ci=rng()%clen;ENC(a+p,ci);}
+                na._ksa_done = false; na.load_name(a,nlen);
+                process_one(a,nlen,score_full(a,nlen,na));
+            }
+        };
 #endif
 
         // ---- mode 1: 顺序区间 — 多候选交错 KSA (Issue #17 扩展) ----
@@ -605,6 +676,27 @@ inline int engine_main(int argc,char**argv){
             int epre=plen+up*scl,evar=vlen-up;
             consume_seq(a,nlen,na,b,nb,c,nc,buf_d,nd,e,ne,epre,evar,L,R);
         };
+#elif PAIR_WIDTH == 6
+        auto consume_mode1=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* buf_d,Name& nd,char* e,Name& ne,char* f,Name& nf,int plen,int vlen,uint64_t L,uint64_t R){
+            na.PRELEN=plen;na.load_prefix(a,nlen);
+            nb.PRELEN=plen;nb.load_prefix(a,nlen);
+            nc.PRELEN=plen;nc.load_prefix(a,nlen);
+            nd.PRELEN=plen;nd.load_prefix(a,nlen);
+            ne.PRELEN=plen;ne.load_prefix(a,nlen);
+            nf.PRELEN=plen;nf.load_prefix(a,nlen);
+            uint8_t dl[16],dr[16];uint64_t now;
+            now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
+            now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
+            int up=0;while(up<vlen&&dl[up]==dr[up])up++;
+            now=L;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(a+plen+d*scl,ci);now/=clen;}
+            now=L+1;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(b+plen+d*scl,ci);now/=clen;}
+            now=L+2;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(c+plen+d*scl,ci);now/=clen;}
+            now=L+3;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(buf_d+plen+d*scl,ci);now/=clen;}
+            now=L+4;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(e+plen+d*scl,ci);now/=clen;}
+            now=L+5;for(int d=vlen-1;d>=0;d--){int ci=now%clen;ENC(f+plen+d*scl,ci);now/=clen;}
+            int epre=plen+up*scl,evar=vlen-up;
+            consume_seq(a,nlen,na,b,nb,c,nc,buf_d,nd,e,ne,f,nf,epre,evar,L,R);
+        };
 #endif
 
         // ---- mode 2/4: 随机额外字符 + 随机区间 — 多候选交错 KSA (Issue #17 扩展) ----
@@ -662,6 +754,22 @@ inline int engine_main(int argc,char**argv){
             L=rng()%random_range_max;R=L+CHUNK_SIZE;
             consume_seq(a,nlen,na,b,nb,c,nc,d,nd,e,ne,epre,evar,L,R);
         };
+#elif PAIR_WIDTH == 6
+        auto consume_mode24=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,char* f,Name& nf,
+                                 int plen,uint64_t& L,uint64_t& R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);memcpy(d,a,plen+extra*scl);memcpy(e,a,plen+extra*scl);memcpy(f,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            nd.PRELEN=epre;nd.load_prefix(d,nlen);
+            ne.PRELEN=epre;ne.load_prefix(e,nlen);
+            nf.PRELEN=epre;nf.load_prefix(f,nlen);
+            L=rng()%random_range_max;R=L+CHUNK_SIZE;
+            consume_seq(a,nlen,na,b,nb,c,nc,d,nd,e,ne,f,nf,epre,evar,L,R);
+        };
 #endif
 
         // ---- mode 3: 随机额外字符 + 随机逐位 — 多候选交错 KSA (Issue #17 扩展) ----
@@ -715,6 +823,21 @@ inline int engine_main(int argc,char**argv){
             ne.PRELEN=epre;ne.load_prefix(e,nlen);
             consume_rand(a,nlen,na,b,nb,c,nc,d,nd,e,ne,epre,evar,L,R,rng);
         };
+#elif PAIR_WIDTH == 6
+        auto consume_mode3=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,char* f,Name& nf,
+                                int plen,uint64_t L,uint64_t R,std::mt19937_64& rng){
+            int extra=vlen-varlen_task;
+            if(extra>0)for(int pos=plen;pos<plen+extra*scl;pos+=scl){int ci=rng()%clen;ENC(a+pos,ci);}
+            memcpy(b,a,plen+extra*scl);memcpy(c,a,plen+extra*scl);memcpy(d,a,plen+extra*scl);memcpy(e,a,plen+extra*scl);memcpy(f,a,plen+extra*scl);
+            int epre=plen+extra*scl,evar=varlen_task;
+            na.PRELEN=epre;na.load_prefix(a,nlen);
+            nb.PRELEN=epre;nb.load_prefix(b,nlen);
+            nc.PRELEN=epre;nc.load_prefix(c,nlen);
+            nd.PRELEN=epre;nd.load_prefix(d,nlen);
+            ne.PRELEN=epre;ne.load_prefix(e,nlen);
+            nf.PRELEN=epre;nf.load_prefix(f,nlen);
+            consume_rand(a,nlen,na,b,nb,c,nc,d,nd,e,ne,f,nf,epre,evar,L,R,rng);
+        };
 #endif
 
         while(true){
@@ -756,6 +879,11 @@ inline int engine_main(int argc,char**argv){
             if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,plen,vlen,L,R);
             else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,plen,L,R,rng);
             else             consume_mode24(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,plen,L,R,rng);
+#elif PAIR_WIDTH == 6
+            memcpy(buf_b,buf,nlen+1);memcpy(buf_c,buf,nlen+1);memcpy(buf_d,buf,nlen+1);memcpy(buf_e,buf,nlen+1);memcpy(buf_f,buf,nlen+1);
+            if(mode==1)      consume_mode1(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,buf_f,name_f,plen,vlen,L,R);
+            else if(mode==3) consume_mode3(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,buf_f,name_f,plen,L,R,rng);
+            else             consume_mode24(buf,nlen,name_a,buf_b,name_b,buf_c,name_c,buf_d,name_d,buf_e,name_e,buf_f,name_f,plen,L,R,rng);
 #endif
 
             // ===== task 完成: 更新全局状态 + 进度显示 (对齐原版 pbb_all.cpp) =====

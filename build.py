@@ -532,9 +532,20 @@ def _detect_pair_width() -> int:
     Returns:
         2 for ARM (in-order CPUs like Cortex-A55 can't handle more),
         5 for x86 Golden Cove / Zen4 / Zen5 (large ROB),
+        6 for x86 Zen5+ / Lion Cove+ (ultra-wide ROB, experimental),
         4 for other x86 (default safe value).
+
+    Override: set PBB_PAIR_WIDTH env var (e.g. PBB_PAIR_WIDTH=6).
     """
     import platform
+
+    # Allow manual override via environment variable
+    env_override = os.environ.get("PBB_PAIR_WIDTH", "")
+    if env_override and env_override.isdigit():
+        val = int(env_override)
+        if 2 <= val <= 6:
+            return val
+
     machine = platform.machine()
     if machine.startswith("aarch") or machine.startswith("arm"):
         return 2
@@ -596,7 +607,9 @@ def _detect_pair_width() -> int:
                     return 5
             elif is_amd:
                 # Zen4 (family 0x19=25), Zen5 (family 0x1A=26)
-                if family >= 0x19:
+                if family >= 0x1A:
+                    return 6
+                elif family >= 0x19:
                     return 5
         except Exception:
             pass
