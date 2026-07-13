@@ -539,7 +539,7 @@ def _detect_pair_width() -> int:
     if machine.startswith("aarch") or machine.startswith("arm"):
         return 2
 
-    # Try /proc/cpuinfo on Linux
+    # Try /proc/cpuinfo on Linux/macOS/BSD
     if sys.platform != "win32":
         try:
             with open("/proc/cpuinfo") as f:
@@ -554,6 +554,50 @@ def _detect_pair_width() -> int:
                     m = re.search(r"ryzen\s+(\d)", info)
                     if m and int(m.group(1)) >= 7:
                         return 5
+        except Exception:
+            pass
+    else:
+        # Windows: use CPUID to detect microarchitecture
+        try:
+            if machine.lower() not in ("amd64", "x86_64", "x64"):
+                return 4
+
+            # CPUID leaf 1 EAX: family/model/stepping
+            eax1 = _cpuid_win(1, 0, "eax")
+            if eax1 == 0:
+                return 4
+
+            base_family = (eax1 >> 8) & 0xF
+            base_model  = (eax1 >> 4) & 0xF
+            ext_model   = (eax1 >> 16) & 0xF
+            ext_family  = (eax1 >> 20) & 0xFF
+
+            family = base_family
+            if base_family == 0xF:
+                family += ext_family
+
+            model = base_model
+            if base_family == 0x6 or base_family == 0xF:
+                model |= ext_model << 4
+
+            # Detect vendor via CPUID leaf 0 EBX (first 4 chars of vendor string)
+            ebx0 = _cpuid_win(0, 0, "ebx") & 0xFFFFFFFF
+            is_intel = (ebx0 == 0x756E6547)   # "Genu" in little-endian
+            is_amd   = (ebx0 == 0x68747541)   # "Auth" in little-endian
+
+            if is_intel:
+                # Golden Cove / Raptor Cove / Redwood Cove / Lion Cove / Cougar Cove
+                # (all modern Intel P-core designs with large ROB)
+                # Alder Lake: 0x97/0x9A, Raptor Lake: 0xB7/0xBA/0xBF,
+                # Meteor Lake: 0xAA/0xAC, Arrow Lake: 0xC5/0xC6/0xB5,
+                # Lunar Lake: 0xBD, Panther Lake: 0xCC/0xE5, Wildcat Lake: 0xD5
+                if model in (0x97, 0x9A, 0xB7, 0xBA, 0xBF, 0xAA, 0xAC,
+                             0xC5, 0xC6, 0xB5, 0xBD, 0xCC, 0xE5, 0xD5):
+                    return 5
+            elif is_amd:
+                # Zen4 (family 0x19=25), Zen5 (family 0x1A=26)
+                if family >= 0x19:
+                    return 5
         except Exception:
             pass
 
