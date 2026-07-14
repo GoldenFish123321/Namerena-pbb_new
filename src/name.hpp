@@ -131,9 +131,7 @@ struct alignas(64) Name {
     simd_mul_add_dual_filter(val, ual_skills, name_base, q_len, 30);
 #else
     simd_mul_add_dual(val, ual, ual_skills);
-    for (int i = 0; i < N && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
+    simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
     V += median(name_base[28], name_base[29], name_base[30]);
@@ -667,9 +665,7 @@ struct alignas(64) Name {
     simd_mul_add_filter(val, name_base, q_len, 30);
 #else
     simd_mul_add(val, ual, 181, 160);
-    for (int i = 0; i < N && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
+    simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
     V += median(name_base[10], name_base[11], name_base[12]);
