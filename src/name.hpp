@@ -48,12 +48,12 @@ struct alignas(64) Name {
   // ---- 派生属性 ----
   int q_len;                        // name_base 中有效值的数量 (0-30)
   int V;                            // 八围评分 (load_name 计算)
-  u8_t _p[8];                       // 缓存: finish_load_name 计算的中位数属性 (避免 score_full 重复 median)
+  int _p[8];                       // 缓存: finish_load_name 的中位数属性 (HP 可超 255, 需 int)
   int seed;                         // 种子 (未使用, 保留)
   int PRELEN;                       // load_prefix 预处理的名字字节数
   int NAMELEN;                      // 名字总长度
   bool _ksa_done = false;           // 内部: load_name_pair 已做完 KSA 时跳过重做
-  bool _skills_ready = false;       // 惰性: ual_skills 是否已计算 (仅通过 V 检查的名字需要)
+  bool _skills_ready = false;       // 惰性: ual_skills 是否已计算
 
   // ===== m(): RC4 PRGA 单步 =====
   // 标准 RC4: i++, j = (j + S[i]), swap(S[i], S[j]), 输出 S[(S[i]+S[j]) & 255]
@@ -128,7 +128,7 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== _ensure_skills(): 惰性计算 ual_skills (仅当需要 calc_skills 时才调用) =====
+  // ===== _ensure_skills(): 惰性计算 ual_skills =====
   void _ensure_skills() {
     if (_skills_ready) return;
 #if PBB_HAS_AVX512 || PBB_HAS_AVX2
@@ -145,8 +145,6 @@ struct alignas(64) Name {
   }
 
   // ===== finish_load_name(): 属性过滤 + V 值计算 (惰性: 跳过 ual_skills) =====
-  // 大多数名字在 V<24 提前返回, 此时不需要 ual_skills.
-  // ual_skills 仅当 calc_skills 被调用时才通过 _ensure_skills() 延迟计算.
   void finish_load_name() {
     q_len = -1;
     _skills_ready = false;
@@ -175,22 +173,15 @@ struct alignas(64) Name {
     }
 #endif
     V = 0;
-    _p[6] = median(name_base[28], name_base[29], name_base[30]);
-    V += _p[6];
+    _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
     if (V < 24) return;
-    _p[1] = median(name_base[13], name_base[14], name_base[15]);
-    V += _p[1];
-    _p[2] = median(name_base[16], name_base[17], name_base[18]);
-    V += _p[2];
-    _p[5] = median(name_base[25], name_base[26], name_base[27]);
-    V += _p[5];
+    _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]); V += _p[2];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]); V += _p[5];
     if (V < 165) return;
-    _p[0] = median(name_base[10], name_base[11], name_base[12]);
-    V += _p[0];
-    _p[3] = median(name_base[19], name_base[20], name_base[21]);
-    V += _p[3];
-    _p[4] = median(name_base[22], name_base[23], name_base[24]);
-    V += _p[4];
+    _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]); V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]); V += _p[4];
     if (V < 250) return;
     sort10(name_base);
     _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
@@ -478,28 +469,20 @@ struct alignas(64) Name {
         if (ual[i] >= 89 && ual[i] < 217)
           name_base[++q_len] = ual[i] & 63;
     }
-    // 与 AVX2 路径相同的 V 值计算 (缓存到 _p 避免 score_full 重复 median)
+    // 与 AVX2 路径相同的 V 值计算
     V = 0;
-    _p[6] = median(name_base[28], name_base[29], name_base[30]);
-    V += _p[6];
+    V += median(name_base[28], name_base[29], name_base[30]);
     if (V < 24) return;
-    _p[1] = median(name_base[13], name_base[14], name_base[15]);
-    V += _p[1];
-    _p[2] = median(name_base[16], name_base[17], name_base[18]);
-    V += _p[2];
-    _p[5] = median(name_base[25], name_base[26], name_base[27]);
-    V += _p[5];
+    V += median(name_base[13], name_base[14], name_base[15]);
+    V += median(name_base[16], name_base[17], name_base[18]);
+    V += median(name_base[25], name_base[26], name_base[27]);
     if (V < 165) return;
-    _p[0] = median(name_base[10], name_base[11], name_base[12]);
-    V += _p[0];
-    _p[3] = median(name_base[19], name_base[20], name_base[21]);
-    V += _p[3];
-    _p[4] = median(name_base[22], name_base[23], name_base[24]);
-    V += _p[4];
+    V += median(name_base[10], name_base[11], name_base[12]);
+    V += median(name_base[19], name_base[20], name_base[21]);
+    V += median(name_base[22], name_base[23], name_base[24]);
     if (V < 250) return;
     sort10(name_base);
-    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
-    V += _p[7] / 3;
+    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
   }
 
   // ===== load_name_pair(): 标量回退 — 双候选交错 KSA =====

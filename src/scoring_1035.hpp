@@ -379,13 +379,18 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   name_obj.load_name(name, name_len);
   int V = name_obj.V;
 
+  // ---- Step 2: V 值快检 (大多数名字在此提前返回, 避免 prop 提取) ----
+  // 高路径: V*3 >= 1200; 低路径: V*3 >= 1140+条件
+  // V*3 < 1140 必失败, 无需提取任何属性
   if (__builtin_expect(V * 3 < 1140, 1)) {
     result.flag = false;
     return result;
   }
 
+  // 8 个属性值 (7 个中位数 + HP) — 仅对可能通过 V 检查的名字提取
+  // 属性编号: 0=atk, 1=def, 2=spd, 3=mag, 4=res, 5=acc, 6=eva, 7=HP
   int prop[8];
-  u8_t* _p = name_obj._p;
+  int* _p = name_obj._p;
   prop[0] = _p[0]; prop[1] = _p[1]; prop[2] = _p[2];
   prop[3] = _p[3]; prop[4] = _p[4]; prop[5] = _p[5];
   prop[6] = _p[6]; prop[7] = _p[7];
@@ -451,7 +456,6 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   xp_x[0] = prop[7];              // HP 放在位置 0
   result.props[7] = prop[7];
 
-  // 技能频次: 直接 skill[k] → freq 映射 (16 次迭代代替 35×16 嵌套循环)
   for (int k = 0; k < 16; k++) {
     int sid = name_obj.skill[k];
     result.skills[k] = sid;
@@ -480,7 +484,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
 
     name_obj.loading_name(shadow_name);
     int sprop[8];
-    u8_t* sp = name_obj._p;
+    int* sp = name_obj._p;
     sprop[0] = sp[0]; sprop[1] = sp[1]; sprop[2] = sp[2];
     sprop[3] = sp[3]; sprop[4] = sp[4]; sprop[5] = sp[5];
     sprop[6] = sp[6]; sprop[7] = sp[7];
