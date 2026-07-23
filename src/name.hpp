@@ -48,6 +48,7 @@ struct alignas(64) Name {
   // ---- 派生属性 ----
   int q_len;                        // name_base 中有效值的数量 (0-30)
   int V;                            // 八围评分 (load_name 计算)
+  u8_t _p[8];                       // 缓存: finish_load_name 计算的中位数属性 (避免 score_full 重复 median)
   int seed;                         // 种子 (未使用, 保留)
   int PRELEN;                       // load_prefix 预处理的名字字节数
   int NAMELEN;                      // 名字总长度
@@ -137,18 +138,26 @@ struct alignas(64) Name {
     simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[6] = median(name_base[28], name_base[29], name_base[30]);
+    V += _p[6];
     if (V < 24) return;
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[25], name_base[26], name_base[27]);
+    _p[1] = median(name_base[13], name_base[14], name_base[15]);
+    V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]);
+    V += _p[2];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]);
+    V += _p[5];
     if (V < 165) return;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]);
+    V += _p[0];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]);
+    V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]);
+    V += _p[4];
     if (V < 250) return;
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 
   void load_name(const char *name, int name_len_hint = 0) {
@@ -431,20 +440,28 @@ struct alignas(64) Name {
         if (ual[i] >= 89 && ual[i] < 217)
           name_base[++q_len] = ual[i] & 63;
     }
-    // 与 AVX2 路径相同的 V 值计算
+    // 与 AVX2 路径相同的 V 值计算 (缓存到 _p 避免 score_full 重复 median)
     V = 0;
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[6] = median(name_base[28], name_base[29], name_base[30]);
+    V += _p[6];
     if (V < 24) return;
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[25], name_base[26], name_base[27]);
+    _p[1] = median(name_base[13], name_base[14], name_base[15]);
+    V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]);
+    V += _p[2];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]);
+    V += _p[5];
     if (V < 165) return;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]);
+    V += _p[0];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]);
+    V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]);
+    V += _p[4];
     if (V < 250) return;
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 
   // ===== load_name_pair(): 标量回退 — 双候选交错 KSA =====
@@ -673,15 +690,16 @@ struct alignas(64) Name {
     simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
-    V += median(name_base[25], name_base[26], name_base[27]);
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
+    _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]); V += _p[2];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]); V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]); V += _p[4];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]); V += _p[5];
+    _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 #else
   void loading_name(const char *name) {
@@ -716,15 +734,16 @@ struct alignas(64) Name {
           name_base[++q_len] = ual[i] & 63;
     }
     V = 0;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
-    V += median(name_base[25], name_base[26], name_base[27]);
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
+    _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]); V += _p[2];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]); V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]); V += _p[4];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]); V += _p[5];
+    _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 #endif
 
