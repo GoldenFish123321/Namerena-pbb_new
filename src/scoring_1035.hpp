@@ -451,16 +451,12 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   xp_x[0] = prop[7];              // HP 放在位置 0
   result.props[7] = prop[7];
 
-  // 技能频次: 将 freq[k] 分配到对应的技能 ID 槽
-  for (int i = 0; i < 35; i++) {
-    xp_x[i + 8] = 0;
-    for (int k = 0; k < 16; k++) {
-      if (name_obj.skill[k] == i) {
-        xp_x[i + 8] = name_obj.freq[k];
-        result.skills[k] = i;
-        result.freqs[k] = name_obj.freq[k];
-      }
-    }
+  // 技能频次: 直接 skill[k] → freq 映射 (16 次迭代代替 35×16 嵌套循环)
+  for (int k = 0; k < 16; k++) {
+    int sid = name_obj.skill[k];
+    result.skills[k] = sid;
+    result.freqs[k] = name_obj.freq[k];
+    if (sid < 35) xp_x[sid + 8] = name_obj.freq[k];
   }
 
   // ---- Step 6: 暗影二段评分 (Shadow mechanic) ----
