@@ -7,6 +7,7 @@
 - 进位增量编码替代除法 (`4414e1e`)：consume_seq 中仅首候选做除法，后续候选 memcpy + 进位增量，x86 +6.5%
 - SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
 - PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
+- V 值快检提前 (`26cc8c5`)：score_full 中 V*3<1140 提前返回跳过 8 属性提取，g++ 构建 +11.9%（icpx 编译器已自动优化）
 
 ### 构建与发布
 
