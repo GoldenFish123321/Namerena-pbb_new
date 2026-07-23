@@ -374,12 +374,20 @@ inline void hanxu_Poly(double *xp, const double *x) {
 //         调用方在 Python 层判断 score >= threshold 决定是否输出
 inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   ScoreResult result = {};
-  memset(&result, 0, sizeof(result));
 
-  // ---- Step 1: 加载名字, 提取属性 ----
+  // ---- Step 1: 加载名字, 获取 V 值 ---- 
   name_obj.load_name(name, name_len);
+  int V = name_obj.V;
 
-  // 8 个属性值 (7 个中位数 + HP)
+  // ---- Step 2: V 值快检 (大多数名字在此提前返回, 避免 prop 提取) ----
+  // 高路径: V*3 >= 1200; 低路径: V*3 >= 1140+条件
+  // V*3 < 1140 必失败, 无需提取任何属性
+  if (__builtin_expect(V * 3 < 1140, 1)) {
+    result.flag = false;
+    return result;
+  }
+
+  // 8 个属性值 (7 个中位数 + HP) — 仅对可能通过 V 检查的名字提取
   // 属性编号: 0=atk, 1=def, 2=spd, 3=mag, 4=res, 5=acc, 6=eva, 7=HP
   int prop[8];
   prop[0] = median(name_obj.name_base[10], name_obj.name_base[11], name_obj.name_base[12]);
@@ -392,9 +400,7 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   prop[7] = 154 + name_obj.name_base[3] + name_obj.name_base[4]
                 + name_obj.name_base[5] + name_obj.name_base[6];
 
-  int V = name_obj.V;
-
-  // ---- Step 2: V 值双路径检查 ----
+  // ---- Step 3: V 值双路径检查 ----
   // 高路径: V*3 >= 1200 (大部分高分名字走此路径)
   // 低路径: V*3 >= 1140 且满足特定属性条件 (兜底捕获)
   bool check_skills = false;
