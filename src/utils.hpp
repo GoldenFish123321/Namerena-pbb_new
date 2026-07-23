@@ -163,6 +163,7 @@ static inline void simd_mul_add_filter(const u8_t* __restrict__ val,
       name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
       mask &= mask - 1;
     }
+    if (q_len >= max_len) break;
   }
 }
 
@@ -283,6 +284,7 @@ static inline void simd_mul_add_filter(const u8_t* __restrict__ val,
       name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
       mask &= mask - 1;
     }
+    if (q_len >= max_len) break;
   }
 }
 
