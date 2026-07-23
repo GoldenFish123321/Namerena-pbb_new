@@ -8,6 +8,7 @@
 - SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
 - PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
 - V 值快检提前 (`26cc8c5`)：score_full 中 V*3<1140 提前返回跳过 8 属性提取，g++ 构建 +11.9%（icpx 编译器已自动优化）
+- NEON branchless filter + KSA __restrict 优化 (`a9c0a03`)：finish_load_name 标量 for→simd_filter_range_attr (vtbl1_u8)，load_name_pair/load_prefix __restrict+const locals，ARM Cortex-A55 **+26.4%**
 
 ### 构建与发布
 
