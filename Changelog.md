@@ -9,6 +9,10 @@
 - PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
 - V 值快检提前 (`26cc8c5`)：score_full 中 V*3<1140 提前返回跳过 8 属性提取，g++ 构建 +11.9%（icpx 编译器已自动优化）
 - NEON branchless filter + KSA __restrict 优化 (`a9c0a03`)：finish_load_name 标量 for→simd_filter_range_attr (vtbl1_u8)，load_name_pair/load_prefix __restrict+const locals，ARM Cortex-A55 **+26.4%**
+- 缓存中位数属性 `_p[8]` (`689b606`)：finish_load_name/loading_name 计算 V 值时保存 7 个 median + HP 到 Name::_p[8]，score_full 直接读取避免 7 次重复 median() + HP 求和
+- 惰性 ual_skills 计算 (`b10f5e6`)：finish_load_name 改用 simd_mul_add_filter (仅属性过滤)，ual_skills 延迟到 calc_skills 中按需计算。99.96% 名字 V<24 早退时跳过整个技能变换 SIMD 通路
+- 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
+- SIMD 过滤提前终止 (`2232e81`)：simd_mul_add_filter 收集到 max_len+1 个有效 name_base 值后立即 break，约在第 2~3 次 AVX2 迭代退出 (原始终 8 次)
 
 ### 构建与发布
 

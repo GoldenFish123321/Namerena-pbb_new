@@ -48,10 +48,12 @@ struct alignas(64) Name {
   // ---- 派生属性 ----
   int q_len;                        // name_base 中有效值的数量 (0-30)
   int V;                            // 八围评分 (load_name 计算)
+  u8_t _p[8];                       // 缓存: finish_load_name 计算的中位数属性 (避免 score_full 重复 median)
   int seed;                         // 种子 (未使用, 保留)
   int PRELEN;                       // load_prefix 预处理的名字字节数
   int NAMELEN;                      // 名字总长度
   bool _ksa_done = false;           // 内部: load_name_pair 已做完 KSA 时跳过重做
+  bool _skills_ready = false;       // 惰性: ual_skills 是否已计算 (仅通过 V 检查的名字需要)
 
   // ===== m(): RC4 PRGA 单步 =====
   // 标准 RC4: i++, j = (j + S[i]), swap(S[i], S[j]), 输出 S[(S[i]+S[j]) & 255]
@@ -126,29 +128,73 @@ struct alignas(64) Name {
   //
   // AVX2 优化: 使用 prefix_loaded 标志选择从 saved_val 快速恢复
 #if PBB_HAS_SIMD
-  // ===== finish_load_name(): 融合 SIMD ual 计算 + name_base 过滤 + V 值计算 =====
-  // 融合优化: 消除 ual 中间数组的 store/reload (256 字节), 单次扫描完成 val→ual→filter
+  // ===== _ensure_skills(): 惰性计算 ual_skills (仅当需要 calc_skills 时才调用) =====
+  void _ensure_skills() {
+    if (_skills_ready) return;
+#if PBB_HAS_AVX512 || PBB_HAS_AVX2
+    simd_mul_add(val, ual_skills, 181, 71);
+#else
+    for (int i = 0; i < N; i += 8) {
+      ual[i+0] = val[i+0] * 181 + 71; ual[i+1] = val[i+1] * 181 + 71;
+      ual[i+2] = val[i+2] * 181 + 71; ual[i+3] = val[i+3] * 181 + 71;
+      ual[i+4] = val[i+4] * 181 + 71; ual[i+5] = val[i+5] * 181 + 71;
+      ual[i+6] = val[i+6] * 181 + 71; ual[i+7] = val[i+7] * 181 + 71;
+    }
+#endif
+    _skills_ready = true;
+  }
+
+  // ===== finish_load_name(): 属性过滤 + V 值计算 (惰性: 跳过 ual_skills) =====
+  // 大多数名字在 V<24 提前返回, 此时不需要 ual_skills.
+  // ual_skills 仅当 calc_skills 被调用时才通过 _ensure_skills() 延迟计算.
   void finish_load_name() {
     q_len = -1;
+    _skills_ready = false;
 #if PBB_HAS_AVX512 || PBB_HAS_AVX2
-    simd_mul_add_dual_filter(val, ual_skills, name_base, q_len, 30);
+    simd_mul_add_filter(val, name_base, q_len, 30);
 #else
-    simd_mul_add_dual(val, ual, ual_skills);
-    simd_filter_range_attr(ual, name_base, q_len, 30);
+    for (int i = 0; i < 96; i += 8) {
+      ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
+      ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
+      ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
+      ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
+    }
+    for (int i = 0; i < 96 && q_len < 30; i++)
+      if (ual[i] >= 89 && ual[i] < 217)
+        name_base[++q_len] = ual[i] & 63;
+    if (q_len < 30) {
+      for (int i = 96; i < N; i += 8) {
+        ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
+        ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
+        ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
+        ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
+      }
+      for (int i = 96; i < N && q_len < 30; i++)
+        if (ual[i] >= 89 && ual[i] < 217)
+          name_base[++q_len] = ual[i] & 63;
+    }
 #endif
     V = 0;
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[6] = median(name_base[28], name_base[29], name_base[30]);
+    V += _p[6];
     if (V < 24) return;
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[25], name_base[26], name_base[27]);
+    _p[1] = median(name_base[13], name_base[14], name_base[15]);
+    V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]);
+    V += _p[2];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]);
+    V += _p[5];
     if (V < 165) return;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]);
+    V += _p[0];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]);
+    V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]);
+    V += _p[4];
     if (V < 250) return;
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 
   void load_name(const char *name, int name_len_hint = 0) {
@@ -409,6 +455,7 @@ struct alignas(64) Name {
       }
     }
     _ksa_done = false;
+    _skills_ready = false;
     // 标量 ual 计算: val * 181 + 160 (前 96 字节)
     for (int i = 0; i < 96; i += 8) {
       ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
@@ -431,20 +478,28 @@ struct alignas(64) Name {
         if (ual[i] >= 89 && ual[i] < 217)
           name_base[++q_len] = ual[i] & 63;
     }
-    // 与 AVX2 路径相同的 V 值计算
+    // 与 AVX2 路径相同的 V 值计算 (缓存到 _p 避免 score_full 重复 median)
     V = 0;
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[6] = median(name_base[28], name_base[29], name_base[30]);
+    V += _p[6];
     if (V < 24) return;
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[25], name_base[26], name_base[27]);
+    _p[1] = median(name_base[13], name_base[14], name_base[15]);
+    V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]);
+    V += _p[2];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]);
+    V += _p[5];
     if (V < 165) return;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]);
+    V += _p[0];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]);
+    V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]);
+    V += _p[4];
     if (V < 250) return;
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 
   // ===== load_name_pair(): 标量回退 — 双候选交错 KSA =====
@@ -673,15 +728,16 @@ struct alignas(64) Name {
     simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
-    V += median(name_base[25], name_base[26], name_base[27]);
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
+    _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]); V += _p[2];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]); V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]); V += _p[4];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]); V += _p[5];
+    _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 #else
   void loading_name(const char *name) {
@@ -716,15 +772,16 @@ struct alignas(64) Name {
           name_base[++q_len] = ual[i] & 63;
     }
     V = 0;
-    V += median(name_base[10], name_base[11], name_base[12]);
-    V += median(name_base[13], name_base[14], name_base[15]);
-    V += median(name_base[16], name_base[17], name_base[18]);
-    V += median(name_base[19], name_base[20], name_base[21]);
-    V += median(name_base[22], name_base[23], name_base[24]);
-    V += median(name_base[25], name_base[26], name_base[27]);
-    V += median(name_base[28], name_base[29], name_base[30]);
+    _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
+    _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
+    _p[2] = median(name_base[16], name_base[17], name_base[18]); V += _p[2];
+    _p[3] = median(name_base[19], name_base[20], name_base[21]); V += _p[3];
+    _p[4] = median(name_base[22], name_base[23], name_base[24]); V += _p[4];
+    _p[5] = median(name_base[25], name_base[26], name_base[27]); V += _p[5];
+    _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
     sort10(name_base);
-    V += (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]) / 3;
+    _p[7] = (154 + name_base[3] + name_base[4] + name_base[5] + name_base[6]);
+    V += _p[7] / 3;
   }
 #endif
 
@@ -741,6 +798,7 @@ struct alignas(64) Name {
   // AVX2 路径: ual_skills 已在 load_name 中由 simd_mul_add_dual 预计算。
 #if PBB_HAS_SIMD
   void calc_skills(const char *name) {
+    _ensure_skills();
     q_len = -1;
     simd_filter_skills(ual_skills, name_base, q_len);  // SIMD: 替换逐字节高位检查
     u8_t *a = name_base + K;       // 技能值从 name_base[64] 开始
@@ -767,14 +825,16 @@ struct alignas(64) Name {
   }
 #else
   void calc_skills(const char *name) {
-    q_len = -1;
-    // 标量 ual 计算: val * 181 + 71 (技能用, add=71 而非 160)
-    for (int i = 0; i < N; i += 8) {
-      ual[i+0] = val[i+0] * 181 + 71; ual[i+1] = val[i+1] * 181 + 71;
-      ual[i+2] = val[i+2] * 181 + 71; ual[i+3] = val[i+3] * 181 + 71;
-      ual[i+4] = val[i+4] * 181 + 71; ual[i+5] = val[i+5] * 181 + 71;
-      ual[i+6] = val[i+6] * 181 + 71; ual[i+7] = val[i+7] * 181 + 71;
+    if (!_skills_ready) {
+      for (int i = 0; i < N; i += 8) {
+        ual[i+0] = val[i+0] * 181 + 71; ual[i+1] = val[i+1] * 181 + 71;
+        ual[i+2] = val[i+2] * 181 + 71; ual[i+3] = val[i+3] * 181 + 71;
+        ual[i+4] = val[i+4] * 181 + 71; ual[i+5] = val[i+5] * 181 + 71;
+        ual[i+6] = val[i+6] * 181 + 71; ual[i+7] = val[i+7] * 181 + 71;
+      }
+      _skills_ready = true;
     }
+    q_len = -1;
     for (int i = 0; i < N; i++)
       if ((ual[i] & 0x80) == 0)
         name_base[++q_len] = (ual[i] + 89) & 63;
