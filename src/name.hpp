@@ -94,11 +94,14 @@ struct alignas(64) Name {
     NAMELEN = name_len;
     int i, j;
     u8_t s;
-    for (i = s = 0, j = NAMELEN; i < PRELEN; i++, j++) {
-      s += name[j] + val_base2[i];
-      std::swap(val_base2[i], val_base2[s]);
-      if (j == NAMELEN)
-        j = -1;
+    u8_t* __restrict v = val_base2;
+    const char* __restrict nm = name;
+    const int kPL = PRELEN;
+    const int kNL = NAMELEN;
+    for (i = s = 0, j = kNL; i < kPL; i++, j++) {
+      s += nm[j] + v[i];
+      { u8_t t = v[i]; v[i] = v[s]; v[s] = t; }
+      if (j == kNL) j = -1;
     }
     i_pre = i;
     j_pre = j;
@@ -180,26 +183,28 @@ struct alignas(64) Name {
     memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
     memcpy(other.val, other.prefix_loaded ? other.saved_val : other.val_base2, sizeof other.val);
     u8_t s_a = s_pre, s_b = s_pre;
+    u8_t* __restrict va = val;
+    u8_t* __restrict vb = other.val;
+    const char* __restrict na = name_a;
+    const char* __restrict nb = name_b;
+    const int kN = N;
+    const int kNL = name_len;
 
-    // 第一遍 KSA — 交错推进两条独立置换链 (共享 j, 等长名字)
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      s_a += name_a[j] + val[i];
-      std::swap(val[i], val[s_a]);
-      s_b += name_b[j] + other.val[i];
-      std::swap(other.val[i], other.val[s_b]);
-      if (j == name_len) j = -1;
+    for (int i = i_pre, j = j_pre; i < kN; i++, j++) {
+      s_a += na[j] + va[i];
+      { u8_t t = va[i]; va[i] = va[s_a]; va[s_a] = t; }
+      s_b += nb[j] + vb[i];
+      { u8_t t = vb[i]; vb[i] = vb[s_b]; vb[s_b] = t; }
+      if (j == kNL) j = -1;
     }
-
-    // 第二遍 KSA — 交错推进, s 各自从 0 开始
     s_a = 0; s_b = 0;
-    for (int i = 0, j = name_len; i < N; i++, j++) {
-      s_a += name_a[j] + val[i];
-      std::swap(val[i], val[s_a]);
-      s_b += name_b[j] + other.val[i];
-      std::swap(other.val[i], other.val[s_b]);
-      if (j == name_len) j = -1;
+    for (int i = 0, j = kNL; i < kN; i++, j++) {
+      s_a += na[j] + va[i];
+      { u8_t t = va[i]; va[i] = va[s_a]; va[s_a] = t; }
+      s_b += nb[j] + vb[i];
+      { u8_t t = vb[i]; vb[i] = vb[s_b]; vb[s_b] = t; }
+      if (j == kNL) j = -1;
     }
-
     _ksa_done = true;
     other._ksa_done = true;
   }
