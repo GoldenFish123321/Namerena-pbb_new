@@ -28,7 +28,7 @@ struct alignas(64) Name {
 #if PBB_HAS_SIMD
   alignas(64) u8_t ual_skills[N];   // 技能评分用变换 (val*181+71) & 0xFF
   u8_t saved_val[256];              // AVX2 优化: 保存 load_prefix 后的 val 状态
-  bool prefix_loaded;               // 是否已执行 load_prefix (用于 AVX2 快速恢复)
+  bool prefix_loaded = false;       // 是否已执行 load_prefix (用于 AVX2 快速恢复)
 #endif
 
   // ---- KSA 基础状态 ----
@@ -41,17 +41,17 @@ struct alignas(64) Name {
   u8_t skill[skill_cnt];            // 技能排列 (40 个技能 ID 的随机排列)
 
   // ---- RC4 状态变量 ----
-  u8_t p, q;                        // RC4 PRGA 的 i, j 指针
-  u8_t i_pre, j_pre;                // load_prefix 保存的中间状态
-  u8_t s_pre;                       // load_prefix 保存的累加和
+  u8_t p = 0, q = 0;                // RC4 PRGA 的 i, j 指针
+  u8_t i_pre = 0, j_pre = 0;        // load_prefix 保存的中间状态
+  u8_t s_pre = 0;                   // load_prefix 保存的累加和
 
   // ---- 派生属性 ----
-  int q_len;                        // name_base 中有效值的数量 (0-30)
-  int V;                            // 八围评分 (load_name 计算)
-  int _p[8];                       // 缓存: finish_load_name 的中位数属性 (HP 可超 255, 需 int)
-  int seed;                         // 种子 (未使用, 保留)
-  int PRELEN;                       // load_prefix 预处理的名字字节数
-  int NAMELEN;                      // 名字总长度
+  int q_len = 0;                    // name_base 中有效值的数量 (0-30)
+  int V = 0;                        // 八围评分 (load_name 计算)
+  int _p[8] = {};                   // 缓存: finish_load_name 的中位数属性 (HP 可超 255, 需 int)
+  int seed = 0;                     // 种子 (未使用, 保留)
+  int PRELEN = 0;                   // load_prefix 预处理的名字字节数
+  int NAMELEN = 0;                  // 名字总长度
   bool _ksa_done = false;           // 内部: load_name_pair 已做完 KSA 时跳过重做
   bool _skills_ready = false;       // 惰性: ual_skills 是否已计算
 
@@ -353,6 +353,8 @@ struct alignas(64) Name {
         } else break;
       }
     }
+    // 钳制: 共享前缀不能超过 pass1 剩余迭代 (i_cont 从 i_pre 起不能越过 val[256])
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
     // ---- 共享前缀状态 (单链, 直接在 va 上计算) ----
     memcpy(va, prefix_loaded ? saved_val : val_base2, sizeof val);
     u8_t s1 = s_pre;
@@ -432,6 +434,8 @@ struct alignas(64) Name {
     // ---- 共享前缀状态 (单链, 直接在 val 上计算, 省一次拷贝) ----
     int sp_len = vary_start - j_pre;
     if (sp_len < 1) sp_len = 0;
+    // 钳制: 共享前缀不能超过 pass1 剩余迭代 (i_cont 从 i_pre 起不能越过 val[256])
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
     memcpy(va, prefix_loaded ? saved_val : val_base2, sizeof val);
     u8_t s1 = s_pre;
     int i_cont = i_pre, j_cont = j_pre;
@@ -502,6 +506,8 @@ struct alignas(64) Name {
                            int nlen, int vary_start, int sp_len,
                            Name& ob, Name& oc, Name& od, Name& oe) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
+    // 钳制: 共享前缀不能超过 pass1 剩余迭代 (i_cont 从 i_pre 起不能越过 val[256])
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
     // 1) 共享前缀状态 (单链)
     u8_t S1[N];
     memcpy(S1, prefix_loaded ? saved_val : val_base2, sizeof S1);
@@ -836,6 +842,8 @@ struct alignas(64) Name {
                            int nlen, int vary_start, int sp_len,
                            Name& ob, Name& oc, Name& od, Name& oe) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
+    // 钳制: 共享前缀不能超过 pass1 剩余迭代 (i_cont 从 i_pre 起不能越过 val[256])
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
     u8_t S1[N];
     memcpy(S1, val_base2, sizeof S1);
     u8_t s1 = s_pre;

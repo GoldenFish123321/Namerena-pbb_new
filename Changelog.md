@@ -24,6 +24,11 @@
 
 ### 修复
 
+- 修复非空后缀时共享 key KSA 错误 (`1adfc58`)：`vary_start` 改为 `epre+(evar-1)*scl`（最低位数字起点），此前 `nlen-scl` 在后缀非空时会越过差异字节，导致 shared_key 把名字 a 的最后一位错误广播给候选 b..e（b..e 评分静默错误）
+- 修复长名字 (nlen>256) 时共享前缀单链越界写 val (`1adfc58`)：`sp_len` 钳制到 `N-i_pre`，防止写穿 256 字节 S-box 破坏相邻结构体成员
+- 修复 clen>256（大字库/汉字集）时数字截断 (`1adfc58`)：`dig`/`dl`/`dr` 由 uint8_t 改 uint16_t，避免枚举字符错位
+- 修复区间跨 `clen^vlen` 整倍+1 时 `evar==0` 导致 `dig[-1]` 越界读 (`1adfc58`)：`can_shared` 加 `evar>0` 守卫
+- 防御性初始化 Name 成员 + mode 2/4 空/单字符集死循环修复 (`1adfc58`)：`prefix_loaded`/`i_pre`/`j_pre`/`s_pre`/`q_len`/`V`/`_p`/`PRELEN`/`NAMELEN` 加默认值；`while(x<CHUNK_SIZE)` 加 `varlen_task<vlen` 上限
 - CSV 分隔符从逗号改为 SOH (`63d6268`)：前缀内含逗号时不再被误拆分
 - 修复 `_p[8]` u8_t 溢出 (`7a4dd3e`)：HP 原始值最大 406 超出 u8_t，改为 int _p[8] 避免截断导致评分错误
 - 非 Windows engine 编译补 `-pthread` (`48ae684`)：g++/clang++ 使用 std::thread 链接缺参导致 `undefined reference to pthread_create`，感谢 [@abrucestd](https://github.com/abrucestd) 报告 ([#38](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/38))
