@@ -53,6 +53,7 @@ bench/*.out
 bench/a.in
 bench/params.in
 bench/verify*.exe
+bench/out_*.txt
 bench_*.txt
 alt*.txt
 alt2*.txt
