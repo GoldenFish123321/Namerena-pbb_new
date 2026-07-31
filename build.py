@@ -159,8 +159,12 @@ def _cpu_has_avx512f():
 
 
 def check_python():
-    if sys.version_info < (3, 10):
-        print("ERROR: Python 3.10+ required", file=sys.stderr)
+    # 最低 3.9: 代码使用 PEP 585 泛型注解 (list[str] / dict[str, ...], Python 3.9 引入)。
+    # 3.8 及更早会在模块加载时对注解求值抛 TypeError ('list' object is not subscriptable)。
+    # tomllib 依赖已有 tomli 兜底 (run.sh 对 <3.11 自动安装), 不构成门槛 (Issue #37)。
+    if sys.version_info < (3, 9):
+        print(f"ERROR: Python 3.9+ required (当前 {sys.version.split()[0]}, "
+              f"代码使用 PEP 585 泛型注解)", file=sys.stderr)
         sys.exit(1)
 
 
