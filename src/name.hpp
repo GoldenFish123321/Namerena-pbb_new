@@ -131,16 +131,10 @@ struct alignas(64) Name {
   // ===== _ensure_skills(): 惰性计算 ual_skills =====
   void _ensure_skills() {
     if (_skills_ready) return;
-#if PBB_HAS_AVX512 || PBB_HAS_AVX2
+    // 统一调用 simd_mul_add (AVX2/AVX-512/NEON 三平台均有实现)
+    // 修复 (2026-07-31): NEON 分支原先误写 ual 数组 (add=71 的属性变换),
+    // 导致 calc_skills 读取的 ual_skills 从未被计算, 技能频次基于垃圾数据。
     simd_mul_add(val, ual_skills, 181, 71);
-#else
-    for (int i = 0; i < N; i += 8) {
-      ual[i+0] = val[i+0] * 181 + 71; ual[i+1] = val[i+1] * 181 + 71;
-      ual[i+2] = val[i+2] * 181 + 71; ual[i+3] = val[i+3] * 181 + 71;
-      ual[i+4] = val[i+4] * 181 + 71; ual[i+5] = val[i+5] * 181 + 71;
-      ual[i+6] = val[i+6] * 181 + 71; ual[i+7] = val[i+7] * 181 + 71;
-    }
-#endif
     _skills_ready = true;
   }
 
@@ -151,26 +145,9 @@ struct alignas(64) Name {
 #if PBB_HAS_AVX512 || PBB_HAS_AVX2
     simd_mul_add_filter(val, name_base, q_len, 30);
 #else
-    for (int i = 0; i < 96; i += 8) {
-      ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
-      ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
-      ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
-      ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
-    }
-    for (int i = 0; i < 96 && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
-    if (q_len < 30) {
-      for (int i = 96; i < N; i += 8) {
-        ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
-        ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
-        ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
-        ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
-      }
-      for (int i = 96; i < N && q_len < 30; i++)
-        if (ual[i] >= 89 && ual[i] < 217)
-          name_base[++q_len] = ual[i] & 63;
-    }
+    // NEON: SIMD ual 计算 + branchless filter (修复 b10f5e6 的标量降级, 恢复 +26% 性能路径)
+    simd_mul_add(val, ual, 181, 160);
+    simd_filter_range_attr(ual, name_base, q_len, 30);
 #endif
     V = 0;
     _p[6] = median(name_base[28], name_base[29], name_base[30]); V += _p[6];
@@ -734,26 +711,8 @@ struct alignas(64) Name {
         s += val[i];
         std::swap(val[i], val[s]);
       }
-    for (int i = 0; i < 96; i += 8) {
-      ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
-      ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
-      ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
-      ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
-    }
-    for (int i = 0; i < 96 && q_len < 30; i++)
-      if (ual[i] >= 89 && ual[i] < 217)
-        name_base[++q_len] = ual[i] & 63;
-    if (q_len < 30) {
-      for (int i = 96; i < N; i += 8) {
-        ual[i+0] = val[i+0] * 181 + 160; ual[i+1] = val[i+1] * 181 + 160;
-        ual[i+2] = val[i+2] * 181 + 160; ual[i+3] = val[i+3] * 181 + 160;
-        ual[i+4] = val[i+4] * 181 + 160; ual[i+5] = val[i+5] * 181 + 160;
-        ual[i+6] = val[i+6] * 181 + 160; ual[i+7] = val[i+7] * 181 + 160;
-      }
-      for (int i = 96; i < N && q_len < 30; i++)
-        if (ual[i] >= 89 && ual[i] < 217)
-          name_base[++q_len] = ual[i] & 63;
-    }
+    simd_mul_add(val, ual, 181, 160);
+    simd_filter_range_attr(ual, name_base, q_len, 30);
     V = 0;
     _p[0] = median(name_base[10], name_base[11], name_base[12]); V += _p[0];
     _p[1] = median(name_base[13], name_base[14], name_base[15]); V += _p[1];
