@@ -13,6 +13,7 @@
 - 惰性 ual_skills 计算 (`b10f5e6`)：finish_load_name 改用 simd_mul_add_filter (仅属性过滤)，ual_skills 延迟到 calc_skills 中按需计算。99.96% 名字 V<24 早退时跳过整个技能变换 SIMD 通路
 - 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
 - SIMD 过滤提前终止 (`2232e81`)：simd_mul_add_filter 收集到 max_len+1 个有效 name_base 值后立即 break，约在第 2~3 次 AVX2 迭代退出 (原始终 8 次)
+- float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
 
 ### 构建与发布
 
@@ -23,6 +24,9 @@
 
 - CSV 分隔符从逗号改为 SOH (`63d6268`)：前缀内含逗号时不再被误拆分
 - 修复 `_p[8]` u8_t 溢出 (`7a4dd3e`)：HP 原始值最大 406 超出 u8_t，改为 int _p[8] 避免截断导致评分错误
+- 非 Windows engine 编译补 `-pthread` (`48ae684`)：g++/clang++ 使用 std::thread 链接缺参导致 `undefined reference to pthread_create`，感谢 [@abrucestd](https://github.com/abrucestd) 报告 ([#38](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/38))
+- convert_old 转换产物不合法 + 缺字段无提示 (`231ac4b`)：旧版 debug_mode 2/3（不更改线程）映射为 0 并警告；缺字段明确报错（文件截断/类型错误）；worker_threads 未预存默认 -1；空 prefix/suffix 自动补 '+', 感谢 [@abrucestd](https://github.com/abrucestd) 报告 ([#36](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/36))
+- Python 最低版本 3.10 → 3.9 (`5f239e9`)：代码实际只需 PEP 585 泛型注解（3.9 引入），3.10 门槛无依据；tomllib 已有 tomli 兜底，感谢 [@abrucestd](https://github.com/abrucestd) 报告 ([#37](https://github.com/GoldenFish123321/Namerena-pbb_new/issues/37))
 
 ## 0.2.0
 
