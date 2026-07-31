@@ -12,8 +12,11 @@
 // constexpr 编译期计算，零运行时开销。AVX2/NEON 均可用。
 #if PBB_HAS_NEON || PBB_HAS_AVX2 || PBB_HAS_AVX512
 struct Compress8Table {
-  u8_t indexes[256][8];
-  u8_t counts[256];
+  // 默认成员初始化器 {} 是必需的: g++ 要求 constexpr 构造函数的每个成员
+  // 都必须显式初始化 (数组成员仅靠函数体赋值不满足), 否则报
+  // "must be initialized by mem-initializer in 'constexpr' constructor"
+  u8_t indexes[256][8]{};
+  u8_t counts[256]{};
   constexpr Compress8Table() {
     for (int mask = 0; mask < 256; mask++) {
       int count = 0;
