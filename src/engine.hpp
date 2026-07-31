@@ -216,7 +216,8 @@ inline int engine_main(int argc,char**argv){
 
     // mode=2/3/4 预处理
     int varlen_task=vlen;uint64_t random_range_max=1;
-    if(mode>=2){varlen_task=0;uint64_t x=1;while(x<CHUNK_SIZE){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
+    // clen<=1 (空/单字符集) 时 x 恒 0/1, 加 varlen_task<vlen 防止死循环
+    if(mode>=2){varlen_task=0;uint64_t x=1;while(x<CHUNK_SIZE&&varlen_task<vlen){varlen_task++;x*=clen;}if(varlen_task>vlen)varlen_task=vlen;random_range_max=x;}
 
     // 预分配 mex_vis (预计 task 数, 留 20% 余量)
     uint64_t est_tasks_u;
@@ -356,7 +357,8 @@ inline int engine_main(int argc,char**argv){
 #if PAIR_WIDTH == 2
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,
                               int epre,int evar,uint64_t L,uint64_t R){
-            uint8_t dig[16];
+            // dig 用 uint16_t: clen 可 > 256 (大字库/汉字集), uint8_t 会截断数字
+            uint16_t dig[16];
             {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+1<R;i+=2){
                 memcpy(b+epre,a+epre,evar*scl);
@@ -374,7 +376,8 @@ inline int engine_main(int argc,char**argv){
 #elif PAIR_WIDTH == 3
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,
                               int epre,int evar,uint64_t L,uint64_t R){
-            uint8_t dig[16];
+            // dig 用 uint16_t: clen 可 > 256 (大字库/汉字集), uint8_t 会截断数字
+            uint16_t dig[16];
             {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+2<R;i+=3){
                 memcpy(b+epre,a+epre,evar*scl);
@@ -397,11 +400,16 @@ inline int engine_main(int argc,char**argv){
 #elif PAIR_WIDTH == 4
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,
                               int epre,int evar,uint64_t L,uint64_t R){
-            int vary_start = nlen - scl;
-            uint8_t dig[16];
+            // vary_start = 第一个可能不同的 key 字节位置 (最低位数字的起点)。
+            // 不能用 nlen-scl: 后缀非空时 nlen-scl 会越过差异字节包含后缀,
+            // 导致 shared_key 把名字 a 的差异字节错误广播给候选 b..e。
+            int vary_start = epre + (evar-1)*scl;
+            // dig 用 uint16_t: clen 可 > 256 (大字库/汉字集), uint8_t 会截断数字
+            uint16_t dig[16];
             {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+3<R;i+=4){
-                bool can_shared = dig[evar-1]+3 < (unsigned)clen;
+                // evar>0 守卫: up==vlen (R-L 为 clen^vlen 倍数+1) 时 evar=0, dig[-1] 越界
+                bool can_shared = evar > 0 && dig[evar-1]+3 < (unsigned)clen;
                 memcpy(b+epre,a+epre,evar*scl);
                 for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
                 memcpy(c+epre,b+epre,evar*scl);
@@ -428,11 +436,16 @@ inline int engine_main(int argc,char**argv){
 #elif PAIR_WIDTH == 5
         auto consume_seq=[&](char* a,int nlen,Name& na,char* b,Name& nb,char* c,Name& nc,char* d,Name& nd,char* e,Name& ne,
                               int epre,int evar,uint64_t L,uint64_t R){
-            int vary_start = nlen - scl;
-            uint8_t dig[16];
+            // vary_start = 第一个可能不同的 key 字节位置 (最低位数字的起点)。
+            // 不能用 nlen-scl: 后缀非空时 nlen-scl 会越过差异字节包含后缀,
+            // 导致 shared_key 把名字 a 的差异字节错误广播给候选 b..e。
+            int vary_start = epre + (evar-1)*scl;
+            // dig 用 uint16_t: clen 可 > 256 (大字库/汉字集), uint8_t 会截断数字
+            uint16_t dig[16];
             {uint64_t now=L;for(int p=evar-1;p>=0;p--){dig[p]=now%clen;ENC(a+epre+p*scl,dig[p]);now/=clen;}}
             for(uint64_t i=L;i+4<R;i+=5){
-                bool can_shared = dig[evar-1]+4 < (unsigned)clen;
+                // evar>0 守卫: up==vlen (R-L 为 clen^vlen 倍数+1) 时 evar=0, dig[-1] 越界
+                bool can_shared = evar > 0 && dig[evar-1]+4 < (unsigned)clen;
                 memcpy(b+epre,a+epre,evar*scl);
                 for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(b+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(b+epre+p*scl,0);}
                 memcpy(c+epre,b+epre,evar*scl);
@@ -545,7 +558,7 @@ inline int engine_main(int argc,char**argv){
         auto consume_mode1=[&](char* buf_a,int nlen,Name& na,char* buf_b,Name& nb,int plen,int vlen,uint64_t L,uint64_t R){
             na.PRELEN=plen;na.load_prefix(buf_a,nlen);
             nb.PRELEN=plen;nb.load_prefix(buf_a,nlen);
-            uint8_t dl[16],dr[16];uint64_t now;
+            uint16_t dl[16],dr[16];uint64_t now;
             now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
             now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
             int up=0;while(up<vlen&&dl[up]==dr[up])up++;
@@ -559,7 +572,7 @@ inline int engine_main(int argc,char**argv){
             na.PRELEN=plen;na.load_prefix(a,nlen);
             nb.PRELEN=plen;nb.load_prefix(a,nlen);
             nc.PRELEN=plen;nc.load_prefix(a,nlen);
-            uint8_t dl[16],dr[16];uint64_t now;
+            uint16_t dl[16],dr[16];uint64_t now;
             now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
             now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
             int up=0;while(up<vlen&&dl[up]==dr[up])up++;
@@ -575,7 +588,7 @@ inline int engine_main(int argc,char**argv){
             nb.PRELEN=plen;nb.load_prefix(a,nlen);
             nc.PRELEN=plen;nc.load_prefix(a,nlen);
             nd.PRELEN=plen;nd.load_prefix(a,nlen);
-            uint8_t dl[16],dr[16];uint64_t now;
+            uint16_t dl[16],dr[16];uint64_t now;
             now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
             now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
             int up=0;while(up<vlen&&dl[up]==dr[up])up++;
@@ -593,7 +606,7 @@ inline int engine_main(int argc,char**argv){
             nc.PRELEN=plen;nc.load_prefix(a,nlen);
             nd.PRELEN=plen;nd.load_prefix(a,nlen);
             ne.PRELEN=plen;ne.load_prefix(a,nlen);
-            uint8_t dl[16],dr[16];uint64_t now;
+            uint16_t dl[16],dr[16];uint64_t now;
             now=L;for(int d=vlen-1;d>=0;d--){dl[d]=now%clen;now/=clen;}
             now=R-1;for(int d=vlen-1;d>=0;d--){dr[d]=now%clen;now/=clen;}
             int up=0;while(up<vlen&&dl[up]==dr[up])up++;
