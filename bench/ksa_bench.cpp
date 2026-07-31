@@ -792,6 +792,27 @@ static void consume_mode1_bench(char* a,int nlen,Name& na,char* b,Name& nb,char*
 
 int main(){
 #if defined(VERIFY)
+    // ===== 过滤器正确性验证: 参考标量 vs 新 SIMD 压缩 =====
+    {
+        std::mt19937_64 rng(12345);
+        int ferr = 0;
+        for (int trial = 0; trial < 20000; trial++) {
+            u8_t val[256];
+            for (int i = 0; i < 256; i++) val[i] = (u8_t)(rng() & 0xFF);
+            u8_t nb1[128], nb2[128];
+            int q1 = -1, q2 = -1;
+            for (int i = 0; i < 256 && q1 < 30; i++) {
+                u8_t u = (u8_t)(val[i] * 181 + 160);
+                if (u >= 89 && u < 217) nb1[++q1] = u & 63;
+            }
+            simd_mul_add_filter(val, nb2, q2, 30);
+            if (q1 != q2) { ferr++; if (ferr<5) printf("FILTER qlen mismatch: %d vs %d\n", q1, q2); continue; }
+            for (int i = 0; i <= q1; i++) {
+                if (nb1[i] != nb2[i]) { ferr++; if (ferr<5) printf("FILTER val mismatch at %d: %d vs %d\n", i, nb1[i], nb2[i]); break; }
+            }
+        }
+        if (ferr == 0) printf("FILTER VERIFY: ALL MATCH\n"); else printf("FILTER VERIFY: %d ERRORS\n", ferr);
+    }
     // ===== 正确性验证: ksa_quint (原始) vs ksa_quint_sp (共享前缀) =====
     {
     Name name_a,name_b,name_c,name_d,name_e;

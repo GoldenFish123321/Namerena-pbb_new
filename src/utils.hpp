@@ -7,6 +7,26 @@
 // ============================================================================
 #include "common.hpp"
 
+// ===== 稳定压缩查找表 (Issue #17 附件 E14) =====
+// 将 8 位 lane mask 映射为 shuffle 索引和匹配计数。
+// constexpr 编译期计算，零运行时开销。AVX2/NEON 均可用。
+#if PBB_HAS_NEON || PBB_HAS_AVX2 || PBB_HAS_AVX512
+struct Compress8Table {
+  u8_t indexes[256][8];
+  u8_t counts[256];
+  constexpr Compress8Table() {
+    for (int mask = 0; mask < 256; mask++) {
+      int count = 0;
+      for (int lane = 0; lane < 8; lane++)
+        if (mask & (1 << lane)) indexes[mask][count++] = lane;
+      for (int lane = count; lane < 8; lane++) indexes[mask][lane] = 0xff;
+      counts[mask] = count;
+    }
+  }
+};
+static constexpr Compress8Table compress8_table{};
+#endif
+
 // ===== 无分支中位数 (branchless median) =====
 // 编译器生成 cmov 指令代替分支跳转，避免分支预测失败惩罚。
 // 输入: 3 个 u8_t 值
@@ -279,10 +299,26 @@ static inline void simd_mul_add_filter(const u8_t* __restrict__ val,
     __m256i ge_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(ge, vzero), vones);
     __m256i lt_mask = _mm256_xor_si256(_mm256_cmpeq_epi8(lt, vzero), vones);
     unsigned mask = (unsigned)_mm256_movemask_epi8(_mm256_and_si256(ge_mask, lt_mask));
-    while (mask && q_len < max_len) {
-      int idx = _tzcnt_u32(mask);
-      name_base[++q_len] = ((const u8_t*)&attr)[idx] & 63;
-      mask &= mask - 1;
+    // 稳定压缩: 每 8 字节组用 Compress8Table + vpshufb 一次性压缩,
+    // 替代逐字节 tzcnt 提取循环
+    if (mask && q_len < max_len) {
+      u8_t attr_arr[32];
+      // 先掩码低 6 位 (原实现 name_base[..] = attr & 63)
+      __m256i attr_low = _mm256_and_si256(attr, _mm256_set1_epi8(63));
+      _mm256_storeu_si256((__m256i*)attr_arr, attr_low);
+      for (int g = 0; g < 4 && q_len < max_len; g++) {
+        unsigned gmask = (mask >> (g * 8)) & 0xFF;
+        if (!gmask) continue;
+        int cnt = compress8_table.counts[gmask];
+        if (q_len + cnt > max_len) cnt = max_len - q_len;
+        if (cnt > 0) {
+          __m128i v8 = _mm_loadl_epi64((const __m128i*)(attr_arr + g * 8));
+          __m128i perm = _mm_loadl_epi64((const __m128i*)compress8_table.indexes[gmask]);
+          __m128i comp = _mm_shuffle_epi8(v8, perm);
+          _mm_storel_epi64((__m128i*)(name_base + q_len + 1), comp);
+          q_len += cnt;
+        }
+      }
     }
     if (q_len >= max_len) break;
   }
@@ -331,26 +367,6 @@ static inline void simd_mul_add_dual(const u8_t* __restrict__ val,
     vst1q_u8(&ual_skill[i], vcombine_u8(vqmovn_u16(loS), vqmovn_u16(hiS)));
   }
 }
-#endif
-
-// ===== NEON 稳定压缩查找表 (Issue #17 附件 E14) =====
-// 将 8 位 lane mask 映射为 vtbl1_u8 的 shuffle 索引和匹配计数。
-// constexpr 编译期计算，零运行时开销。
-#if PBB_HAS_NEON
-struct Compress8Table {
-  u8_t indexes[256][8];
-  u8_t counts[256];
-  constexpr Compress8Table() {
-    for (int mask = 0; mask < 256; mask++) {
-      int count = 0;
-      for (int lane = 0; lane < 8; lane++)
-        if (mask & (1 << lane)) indexes[mask][count++] = lane;
-      for (int lane = count; lane < 8; lane++) indexes[mask][lane] = 0xff;
-      counts[mask] = count;
-    }
-  }
-};
-static constexpr Compress8Table compress8_table{};
 #endif
 
 // ===== SIMD 过滤 + 稳定压缩 (Issue #17 方向二) =====
