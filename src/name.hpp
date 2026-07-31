@@ -325,79 +325,246 @@ struct alignas(64) Name {
   }
 
   // ===== load_name_quint(): 五候选交错 RC4 KSA =====
+  // 算法级优化 (2026-07-31): 内部自检测 5 个名字的共享 key 前缀并只算一次,
+  // 省 4×sp_len 次交换。单路径实现: sp_len=0 时自动退化为原始行为。
+  // 对任意名字 (连续枚举/随机) 均正确: 共享区间 = 从 j_pre 起连续相同的字节。
+  // 调用签名不变, 不改变引擎调用点。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
   void load_name_quint(const char *a, const char *b, const char *c, const char *d, const char *e,
                        int nlen, Name& ob, Name& oc, Name& od, Name& oe) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
-    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
-    memcpy(ob.val, ob.prefix_loaded ? ob.saved_val : ob.val_base2, sizeof ob.val);
-    memcpy(oc.val, oc.prefix_loaded ? oc.saved_val : oc.val_base2, sizeof oc.val);
-    memcpy(od.val, od.prefix_loaded ? od.saved_val : od.val_base2, sizeof od.val);
-    memcpy(oe.val, oe.prefix_loaded ? oe.saved_val : oe.val_base2, sizeof oe.val);
-    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre, se = s_pre;
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-      sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-      sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-      sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
-      se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
-      if (j == nlen) j = -1;
+    const char* __restrict nm_a = a; const char* __restrict nm_b = b;
+    const char* __restrict nm_c = c; const char* __restrict nm_d = d;
+    const char* __restrict nm_e = e;
+    u8_t* __restrict va = val; u8_t* __restrict vb = ob.val;
+    u8_t* __restrict vc = oc.val; u8_t* __restrict vd = od.val;
+    u8_t* __restrict ve = oe.val;
+    // 自检测共享前缀长度 (从 j_pre 起扫描 5 个名字字节相同的连续段)
+    int sp_len = 0;
+    {
+      int j = j_pre;
+      for (int k = 0; k <= nlen; k++) {
+        if (nm_a[j] == nm_b[j] && nm_b[j] == nm_c[j] &&
+            nm_c[j] == nm_d[j] && nm_d[j] == nm_e[j]) {
+          sp_len++;
+          if (j == nlen) j = 0; else j++;
+        } else break;
+      }
     }
-    sa = 0; sb = 0; sc = 0; sd = 0; se = 0;
-    for (int i = 0, j = nlen; i < N; i++, j++) {
-      sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-      sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-      sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-      sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
-      se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
-      if (j == nlen) j = -1;
+    // ---- 共享前缀状态 (单链, 直接在 va 上计算) ----
+    memcpy(va, prefix_loaded ? saved_val : val_base2, sizeof val);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += nm_a[j_cont] + va[i_cont];
+      { u8_t t = va[i_cont]; va[i_cont] = va[s1]; va[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    // ---- 广播到其余 4 链 ----
+    memcpy(vb, va, sizeof val);
+    memcpy(vc, va, sizeof val);
+    memcpy(vd, va, sizeof val);
+    memcpy(ve, va, sizeof val);
+    int vary_eff = j_cont;   // 第一个可能不同的字节位置
+    // ---- pass1 续跑 ----
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1, se = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_eff) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    // ---- pass2 ----
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0, se = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_eff) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
+      }
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
   }
 
   // ===== load_name_quint_shared_key(): 共享 key load 五候选交错 KSA =====
+  // 算法级优化 (2026-07-31): pass1 的前 sp_len 次迭代对 5 条链完全相同
+  // (共享 key 区间, 且初始状态相同) → 只计算一次再广播, 省 4×sp_len 次交换。
+  // sp_len = vary_start - j_pre (vary_start 即第一个可能不同的 key 字节位置)。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
   void load_name_quint_shared_key(const char *a, const char *b, const char *c, const char *d, const char *e,
                                    int nlen, int vary_start, Name& ob, Name& oc, Name& od, Name& oe) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
-    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
-    memcpy(ob.val, ob.prefix_loaded ? ob.saved_val : ob.val_base2, sizeof ob.val);
-    memcpy(oc.val, oc.prefix_loaded ? oc.saved_val : oc.val_base2, sizeof oc.val);
-    memcpy(od.val, od.prefix_loaded ? od.saved_val : od.val_base2, sizeof od.val);
-    memcpy(oe.val, oe.prefix_loaded ? oe.saved_val : oe.val_base2, sizeof oe.val);
-    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre, se = s_pre;
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      if (j >= vary_start) {
-        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
-        se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
-      } else {
-        u8_t kb = a[j];
-        sa += kb + val[i]; std::swap(val[i], val[sa]);
-        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
-        se += kb + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
-      }
-      if (j == nlen) j = -1;
+    const char* __restrict nm_a = a; const char* __restrict nm_b = b;
+    const char* __restrict nm_c = c; const char* __restrict nm_d = d;
+    const char* __restrict nm_e = e;
+    u8_t* __restrict va = val; u8_t* __restrict vb = ob.val;
+    u8_t* __restrict vc = oc.val; u8_t* __restrict vd = od.val;
+    u8_t* __restrict ve = oe.val;
+    // ---- 共享前缀状态 (单链, 直接在 val 上计算, 省一次拷贝) ----
+    int sp_len = vary_start - j_pre;
+    if (sp_len < 1) sp_len = 0;
+    memcpy(va, prefix_loaded ? saved_val : val_base2, sizeof val);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += nm_a[j_cont] + va[i_cont];
+      { u8_t t = va[i_cont]; va[i_cont] = va[s1]; va[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
     }
-    sa = 0; sb = 0; sc = 0; sd = 0; se = 0;
-    for (int i = 0, j = nlen; i < N; i++, j++) {
-      if (j >= vary_start) {
-        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
-        se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
-      } else {
-        u8_t kb = a[j];
-        sa += kb + val[i]; std::swap(val[i], val[sa]);
-        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
-        se += kb + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
+    // ---- 广播到其余 4 链 (val 已含共享前缀状态) ----
+    memcpy(vb, va, sizeof val);
+    memcpy(vc, va, sizeof val);
+    memcpy(vd, va, sizeof val);
+    memcpy(ve, va, sizeof val);
+    // ---- pass1 续跑 (5 链) ----
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1, se = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
       }
-      if (j == nlen) j = -1;
+    }
+    // ---- pass2 (5 链, 无共享) ----
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0, se = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
+  }
+
+  // ===== load_name_quint_sp(): 共享前缀五候选交错 KSA (算法级优化) =====
+  // 原理: 连续 5 个名字在 mode 1 下只差最低 1~2 位数字, pass1 的前 sp_len 次
+  // 迭代 (共享字节区间) 对 5 条链完全相同 → 只计算一次再广播, 省 4×sp_len 次交换。
+  // 前置: 5 个名字的 key 在前 sp_len 个字节 (从 j_pre 起) 完全相同。
+  // 参数: vary_start = 第一个可能不同的字节位置; sp_len = 共享前缀迭代数。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
+  void load_name_quint_sp(const char *a, const char *b, const char *c, const char *d, const char *e,
+                           int nlen, int vary_start, int sp_len,
+                           Name& ob, Name& oc, Name& od, Name& oe) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
+    // 1) 共享前缀状态 (单链)
+    u8_t S1[N];
+    memcpy(S1, prefix_loaded ? saved_val : val_base2, sizeof S1);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    const char* __restrict nm_a = a;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += nm_a[j_cont] + S1[i_cont];
+      { u8_t t = S1[i_cont]; S1[i_cont] = S1[s1]; S1[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    // 2) 广播到 5 链
+    memcpy(val, S1, sizeof S1);
+    memcpy(ob.val, S1, sizeof S1);
+    memcpy(oc.val, S1, sizeof S1);
+    memcpy(od.val, S1, sizeof S1);
+    memcpy(oe.val, S1, sizeof S1);
+    const char* __restrict nm_b = b; const char* __restrict nm_c = c;
+    const char* __restrict nm_d = d; const char* __restrict nm_e = e;
+    u8_t* __restrict va = val; u8_t* __restrict vb = ob.val;
+    u8_t* __restrict vc = oc.val; u8_t* __restrict vd = od.val;
+    u8_t* __restrict ve = oe.val;
+    // 3) pass1 续跑 (5 链)
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1, se = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    // 4) pass2 (5 链, 无共享)
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0, se = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+          se += nm_e[j] + ve[i]; std::swap(ve[i], ve[se]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+          se += kb + ve[i]; std::swap(ve[i], ve[se]);
+        }
+        if (j == nlen) j = -1;
+      }
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
   }
@@ -659,6 +826,69 @@ struct alignas(64) Name {
         se += kb + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
       }
       if (j == nlen) j = -1;
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
+  }
+
+  // ===== load_name_quint_sp(): 标量回退 — 共享前缀五候选交错 KSA =====
+  // 与 SIMD 版同构 (val_base2 代替 saved_val/prefix_loaded)。
+  void load_name_quint_sp(const char *a, const char *b, const char *c, const char *d, const char *e,
+                           int nlen, int vary_start, int sp_len,
+                           Name& ob, Name& oc, Name& od, Name& oe) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1; oe.q_len = -1;
+    u8_t S1[N];
+    memcpy(S1, val_base2, sizeof S1);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += a[j_cont] + S1[i_cont];
+      { u8_t t = S1[i_cont]; S1[i_cont] = S1[s1]; S1[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    memcpy(val, S1, sizeof S1);
+    memcpy(ob.val, S1, sizeof S1);
+    memcpy(oc.val, S1, sizeof S1);
+    memcpy(od.val, S1, sizeof S1);
+    memcpy(oe.val, S1, sizeof S1);
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1, se = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+          sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+          sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+          sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+          se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
+        } else {
+          u8_t kb = a[j];
+          sa += kb + val[i]; std::swap(val[i], val[sa]);
+          sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+          sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+          sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+          se += kb + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0, se = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += a[j] + val[i]; std::swap(val[i], val[sa]);
+          sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+          sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+          sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+          se += e[j] + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
+        } else {
+          u8_t kb = a[j];
+          sa += kb + val[i]; std::swap(val[i], val[sa]);
+          sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
+          sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
+          sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+          se += kb + oe.val[i]; std::swap(oe.val[i], oe.val[se]);
+        }
+        if (j == nlen) j = -1;
+      }
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
   }

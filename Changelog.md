@@ -14,6 +14,8 @@
 - 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
 - SIMD 过滤提前终止 (`2232e81`)：simd_mul_add_filter 收集到 max_len+1 个有效 name_base 值后立即 break，约在第 2~3 次 AVX2 迭代退出 (原始终 8 次)
 - float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
+- 共享前缀 KSA (`15c35c6`)：连续 5 个名字共享 key 前缀区间，pass1 前 sp_len 次迭代对 5 条链完全相同 → 单链计算后广播到其余 4 链，省 4×sp_len 次交换；load_name_quint 内置自检测共享前缀并在 sp_len=0 时自动退化，Intel U7 255H **+5.5%**
+- 属性过滤器 SIMD 稳定压缩 (`4abf93c`)：AVX2 属性提取循环改用 vpshufb + Compress8Table 每 8 字节组一次性压缩（先 &63 掩码再 shuffle），替代逐字节分支提取，Intel U7 255H 叠加后总 **+11.7%**（100M 交替 A/B，2 线程）
 
 ### 构建与发布
 
