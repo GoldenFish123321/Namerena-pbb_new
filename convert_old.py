@@ -28,15 +28,29 @@ def parse_old(path: str) -> dict:
 
     ti = 0  # token 索引
 
-    def next_int() -> int:
+    def next_int(required: bool = True, field: str = "token", default: int = 0) -> int:
         nonlocal ti
-        v = int(tokens[ti][0])
+        if ti >= len(tokens):
+            if not required:
+                return default
+            raise ValueError(f"字段不足: 文件在第 {ti + 1} 个 token 处提前结束 (缺少后续字段)")
+        try:
+            v = int(tokens[ti][0])
+        except ValueError:
+            raise ValueError(
+                f"字段类型错误: 第 {ti + 1} 个 token '{tokens[ti][0]}' 不是数字 "
+                f"(可能上一字段缺失导致解析错位)"
+            )
         ti += 1
         return v
 
-    def next_line() -> str:
+    def next_line(required: bool = True, field: str = "token") -> str:
         """读取整行 (模拟 read()). 每行只被消费一次."""
         nonlocal ti
+        if ti >= len(tokens):
+            if not required:
+                return ""
+            raise ValueError(f"字段不足: 文件在第 {ti + 1} 个 token 处提前结束 (缺少后续字段)")
         # 找到当前 token 对应的行, 返回该行的原始内容
         li = tokens[ti][1]
         line = lines[li]
@@ -45,7 +59,7 @@ def parse_old(path: str) -> dict:
             ti += 1
         return line
 
-    result = {}
+    result = {"_warnings": []}
 
     # 1. debug_mode
     result["debug_mode"] = next_int()
@@ -158,7 +172,12 @@ def parse_old(path: str) -> dict:
 
     result["result_file"] = next_line()
 
-    result["worker_threads"] = next_int()
+    # worker_threads: 旧格式可能未预存 (用户交互输入线程数), 缺失时用 -1 (自动检测)
+    if ti < len(tokens):
+        result["worker_threads"] = next_int()
+    else:
+        result["worker_threads"] = -1
+        result["_warnings"].append("worker_threads 缺失 (旧格式未预存线程数), 已设为 -1 (自动检测)")
 
     return result
 
@@ -186,20 +205,39 @@ def build_config(parsed: dict) -> dict:
     """从解析结果构建新格式 config dict."""
     cfg = {}
 
-    cfg["debug_mode"] = parsed["debug_mode"]
+    # debug_mode: 旧版 0/1 = 正常/调试, 2/3 = "不更改线程".
+    # 新版 debug_mode 只接受 0/1 (main.py _validate_config), 线程策略独立为
+    # threads.worker_threads, 因此 2/3 映射为 0 并警告 (Issue #36).
+    dm = parsed["debug_mode"]
+    if dm in (2, 3):
+        cfg["debug_mode"] = 0
+        parsed["_warnings"].append(
+            f"旧版 debug_mode={dm} (不更改线程) 在新版中不存在, 已映射为 0 (正常); "
+            "如需固定线程数请在 threads.worker_threads 中设置"
+        )
+    else:
+        cfg["debug_mode"] = dm
     cfg["team_name"] = parsed["team_name"]
 
-    # prefixes
-    cfg["prefixes"] = [
-        {"name": p if p not in ("+", "") else "+"}
-        for p in parsed["prefixes"]
-    ]
+    # prefixes: 新版要求至少一个元素, 旧格式可能为 0, 空则补 "+" (无前缀) 并警告
+    if not parsed["prefixes"]:
+        cfg["prefixes"] = [{"name": "+"}]
+        parsed["_warnings"].append("prefixes 为空 (旧格式无前缀), 已补 '+' (无前缀)")
+    else:
+        cfg["prefixes"] = [
+            {"name": p if p not in ("+", "") else "+"}
+            for p in parsed["prefixes"]
+        ]
 
-    # suffixes
-    cfg["suffixes"] = [
-        {"name": s if s not in ("+", "") else "+"}
-        for s in parsed["suffixes"]
-    ]
+    # suffixes: 新版要求至少一个元素, 旧格式可能为 0, 空则补 "+" (无后缀) 并警告
+    if not parsed["suffixes"]:
+        cfg["suffixes"] = [{"name": "+"}]
+        parsed["_warnings"].append("suffixes 为空 (旧格式无后缀), 已补 '+' (无后缀)")
+    else:
+        cfg["suffixes"] = [
+            {"name": s if s not in ("+", "") else "+"}
+            for s in parsed["suffixes"]
+        ]
 
     # character_set
     scl = parsed["scl"]
@@ -360,8 +398,18 @@ def main():
         print(f"ERROR: 文件不存在: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    parsed = parse_old(args.input)
+    parsed = None
+    try:
+        parsed = parse_old(args.input)
+    except ValueError as e:
+        print(f"ERROR: 解析失败: {e}", file=sys.stderr)
+        print("      旧格式文件字段不完整或格式有误, 请检查文件内容。", file=sys.stderr)
+        sys.exit(1)
     config = build_config(parsed)
+
+    # 打印解析/转换警告 (缺字段、debug_mode 映射等, Issue #36)
+    for w in parsed.get("_warnings", []):
+        print(f"  ⚠ 警告: {w}")
 
     yaml_str = to_yaml(config)
 
