@@ -730,6 +730,10 @@ def _compile_engine(verbose=False):
         if sys.platform == "win32" and not is_msvc and "g++" in str(name):
             flags = flags + ["-static", "-static-libgcc", "-static-libstdc++"]
 
+        # 非 Windows: engine 使用 std::thread, 链接需要 -pthread (Issue #38)
+        if sys.platform != "win32":
+            flags = flags + ["-pthread"]
+
         # icpx on Windows: OpenMP is needed by the engine (multi-threaded), but NOT by pbb_core
         if sys.platform == "win32" and "icpx" in str(name):
             flags = flags + ["-qopenmp"]
