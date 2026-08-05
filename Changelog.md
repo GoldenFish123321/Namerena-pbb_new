@@ -29,6 +29,7 @@
 - Release zip 修复 (`a1d0fe3`)：pbb_core.pyd 重复打包（省 ~2.9MB/包）、README 恢复命令行参数说明、zip 父目录包裹
 - Windows PAIR_WIDTH CPUID 检测 (`51eca29`)：Intel/AMD 现代 CPU 自动识别微架构
 - PAIR_WIDTH 配置项 (`c96af46`)：环境变量 `PBB_PAIR_WIDTH=2~8` 覆盖 CPU 自动检测（越界值告警并回退），可在特定机器手动调整 KSA 交错宽度
+- CI 性能回归检查：新增 `perf-regression` job，同一 runner 内编译 merge-base 基线引擎 + PR 引擎交替 A/B 基准（`bench/ci_perf_check.py` 复用 `bench/alt_test.py`），median improvement 低于 -5% 判为回归——解决 GitHub runner 机器异构下绝对速度不可比、性能回归无法用 CI 拦截的问题
 
 ### 修复
 
