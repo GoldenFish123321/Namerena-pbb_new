@@ -14,6 +14,7 @@
 - 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
 - SIMD 过滤提前终止 (`2232e81`)：simd_mul_add_filter 收集到 max_len+1 个有效 name_base 值后立即 break，约在第 2~3 次 AVX2 迭代退出 (原始终 8 次)
 - float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
+- KSA SoA 交错存储 + 32 位合并内存操作 (`a95a510`)：四候选 val 从 AoS（4 个独立数组）改为行交错 `val4[i][0..3]`，val[i] 的 load/store 由 4 条 1 字节合并为 1 条 32 位，KSA 每步 L1 内存操作 16→10.5，x86（3 线程, 1e8 区间, 严格交替 ×2）**+13.8%**，输出 17 条逐行一致
 
 ### 构建与发布
 
