@@ -644,7 +644,20 @@ def _detect_pair_width() -> int:
         2 for ARM (in-order CPUs like Cortex-A55 can't handle more),
         5 for x86 Golden Cove / Zen4 / Zen5 (large ROB),
         4 for other x86 (default safe value).
+
+    配置项: 环境变量 PBB_PAIR_WIDTH 显式覆盖检测结果 (2~8)。
+    用法: PBB_PAIR_WIDTH=5 ./run.sh -c config.json ...
     """
+    # 配置项覆盖: 用户显式指定时优先于自动检测
+    env = os.environ.get("PBB_PAIR_WIDTH", "").strip()
+    if env.isdigit():
+        w = int(env)
+        if 2 <= w <= 8:
+            print(f"[build] PBB_PAIR_WIDTH={w} (配置项覆盖自动检测)", file=sys.stderr)
+            return w
+        print(f"[build] WARNING: PBB_PAIR_WIDTH={env} 超出范围 2~8, 忽略, 使用自动检测",
+              file=sys.stderr)
+
     import platform
     machine = platform.machine()
     if machine.startswith("aarch") or machine.startswith("arm"):
