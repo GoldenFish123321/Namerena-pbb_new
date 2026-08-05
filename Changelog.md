@@ -28,6 +28,7 @@
 
 - Release zip 修复 (`a1d0fe3`)：pbb_core.pyd 重复打包（省 ~2.9MB/包）、README 恢复命令行参数说明、zip 父目录包裹
 - Windows PAIR_WIDTH CPUID 检测 (`51eca29`)：Intel/AMD 现代 CPU 自动识别微架构
+- PAIR_WIDTH 配置项 (`c96af46`)：环境变量 `PBB_PAIR_WIDTH=2~8` 覆盖 CPU 自动检测（越界值告警并回退），可在特定机器手动调整 KSA 交错宽度
 
 ### 修复
 
