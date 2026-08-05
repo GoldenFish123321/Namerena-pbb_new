@@ -21,6 +21,7 @@
 - SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
 - 进位增量编码替代除法 (`4414e1e`)：consume_seq 中仅首候选做除法，后续候选 memcpy + 进位增量，x86 +6.5%
 - float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
+- KSA SoA 交错存储 + 32 位合并内存操作 (`a95a510`)：四候选 val 从 AoS（4 个独立数组）改为行交错 `val4[i][0..3]`，val[i] 的 load/store 由 4 条 1 字节合并为 1 条 32 位，KSA 每步 L1 内存操作 16→10.5，x86（3 线程, 1e8 区间, 严格交替 ×2）**+13.8%**，输出 17 条逐行一致
 
 ### 构建与发布
 
