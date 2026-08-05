@@ -281,45 +281,59 @@ struct alignas(64) Name {
   void load_name_quad_shared_key(const char *a, const char *b, const char *c, const char *d,
                                   int nlen, int vary_start, Name& ob, Name& oc, Name& od) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
-    memcpy(val, prefix_loaded ? saved_val : val_base2, sizeof val);
-    memcpy(ob.val, ob.prefix_loaded ? ob.saved_val : ob.val_base2, sizeof ob.val);
-    memcpy(oc.val, oc.prefix_loaded ? oc.saved_val : oc.val_base2, sizeof oc.val);
-    memcpy(od.val, od.prefix_loaded ? od.saved_val : od.val_base2, sizeof od.val);
-    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre;
-    // 第一遍 KSA
-    for (int i = i_pre, j = j_pre; i < N; i++, j++) {
-      if (j >= vary_start) {
-        // 变化字节: 各自独立 load
-        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
-      } else {
-        // 公共字节: 只 load a[j]，广播给 4 条链
-        u8_t kb = a[j];
-        sa += kb + val[i]; std::swap(val[i], val[sa]);
-        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+    // ---- SoA 交错 KSA (perf/ksa-soa32) ----
+    // val4[i][0..3] = 4 候选的 val[i] (行交错), 32 位合并 load/store 减少 L1 内存操作:
+    //   load val[i] 4 条 → 1 条 32 位 load; store val[i] 4 条 → 1 条 32 位 store。
+    // 4 候选同源 (load_prefix 后状态一致), 初始化 = 复制 4 份。
+    alignas(64) u8_t val4[256][4];
+    {
+      const u8_t* src = prefix_loaded ? saved_val : val_base2;
+      for (int i = 0; i < 256; i++) {
+        u8_t v = src[i];
+        val4[i][0] = v; val4[i][1] = v; val4[i][2] = v; val4[i][3] = v;
       }
+    }
+    u8_t sa = s_pre, sb = s_pre, sc = s_pre, sd = s_pre;
+    const int kN = N;
+    // 第一遍 KSA: i 从 i_pre, j 从 j_pre
+    for (int i = i_pre, j = j_pre; i < kN; i++, j++) {
+      uint32_t vi = *(const uint32_t*)val4[i];
+      u8_t via = (u8_t)(vi & 0xff), vib = (u8_t)((vi >> 8) & 0xff);
+      u8_t vic = (u8_t)((vi >> 16) & 0xff), vid = (u8_t)((vi >> 24) & 0xff);
+      if (j >= vary_start) {
+        sa += a[j] + via; sb += b[j] + vib; sc += c[j] + vic; sd += d[j] + vid;
+      } else {
+        u8_t kb = a[j];
+        sa += kb + via; sb += kb + vib; sc += kb + vic; sd += kb + vid;
+      }
+      u8_t ta = val4[sa][0], tb = val4[sb][1], tc = val4[sc][2], td = val4[sd][3];
+      *(uint32_t*)val4[i] = (uint32_t)ta | ((uint32_t)tb << 8) | ((uint32_t)tc << 16) | ((uint32_t)td << 24);
+      val4[sa][0] = via; val4[sb][1] = vib; val4[sc][2] = vic; val4[sd][3] = vid;
       if (j == nlen) j = -1;
     }
-    // 第二遍 KSA
+    // 第二遍 KSA: i 从 0, j 从 nlen
     sa = 0; sb = 0; sc = 0; sd = 0;
-    for (int i = 0, j = nlen; i < N; i++, j++) {
+    for (int i = 0, j = nlen; i < kN; i++, j++) {
+      uint32_t vi = *(const uint32_t*)val4[i];
+      u8_t via = (u8_t)(vi & 0xff), vib = (u8_t)((vi >> 8) & 0xff);
+      u8_t vic = (u8_t)((vi >> 16) & 0xff), vid = (u8_t)((vi >> 24) & 0xff);
       if (j >= vary_start) {
-        sa += a[j] + val[i]; std::swap(val[i], val[sa]);
-        sb += b[j] + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += c[j] + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += d[j] + od.val[i]; std::swap(od.val[i], od.val[sd]);
+        sa += a[j] + via; sb += b[j] + vib; sc += c[j] + vic; sd += d[j] + vid;
       } else {
         u8_t kb = a[j];
-        sa += kb + val[i]; std::swap(val[i], val[sa]);
-        sb += kb + ob.val[i]; std::swap(ob.val[i], ob.val[sb]);
-        sc += kb + oc.val[i]; std::swap(oc.val[i], oc.val[sc]);
-        sd += kb + od.val[i]; std::swap(od.val[i], od.val[sd]);
+        sa += kb + via; sb += kb + vib; sc += kb + vic; sd += kb + vid;
       }
+      u8_t ta = val4[sa][0], tb = val4[sb][1], tc = val4[sc][2], td = val4[sd][3];
+      *(uint32_t*)val4[i] = (uint32_t)ta | ((uint32_t)tb << 8) | ((uint32_t)tc << 16) | ((uint32_t)td << 24);
+      val4[sa][0] = via; val4[sb][1] = vib; val4[sc][2] = vic; val4[sd][3] = vid;
       if (j == nlen) j = -1;
+    }
+    // scatter 回 4 个 Name.val (finish_load_name / calc_skills 用 AoS)
+    for (int i = 0; i < 256; i++) {
+      val[i] = val4[i][0];
+      ob.val[i] = val4[i][1];
+      oc.val[i] = val4[i][2];
+      od.val[i] = val4[i][3];
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
   }
