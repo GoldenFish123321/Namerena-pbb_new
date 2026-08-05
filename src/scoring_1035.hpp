@@ -413,6 +413,60 @@ static inline float simd_dot_f32(const float* a, const float* b, int n) {
 }
 #endif
 
+// ===== simd_poly_score: 融合多项式展开 + 模型点积 (按行 SIMD, perf/fused-poly-score) =====
+// 原实现: hanxu_Poly 标量展开 1034 项写 xp_array + simd_dot_f32 读回 (1034 store + 1034 load + 1034 次查表)。
+// 融合: 一阶 44 项直接 dot; 二阶按 POLY_TABLE 的行分组 (p 行 = x[p] * x[p+0..43]),
+//       行内 x[p..43] 连续内存 → SIMD; x[p]==0 (稀疏技能特征) 时整行贡献 0, 跳过。
+// 权重索引: 一阶 y=0..43 → model[1+y]; 二阶 p 行 q 项 → y=44+off_p+q → model[45+off_p+q]。
+//   off_p = 44p - p(p-1)/2 (二阶表 p 行前的累计项数, 见 POLY_TABLE 行分组)。
+// 注意: 浮点累加顺序与原 hanxu+dot 不同, 结果可能有 ~1e-4 级差异 (阈值边界需验证)。
+static inline float simd_poly_score(const float* x, const float* model) {
+  float s = model[0];
+  // 一阶 44 项: model[1..44] · x[0..43]
+  for (int q = 0; q < 44; q++) s += model[1 + q] * x[q];
+  // 二阶按行
+  int off = 0;
+  for (int p = 0; p < 44; p++) {
+    int len = 44 - p;
+    float xp = x[p];
+    if (xp != 0.0f) {
+      const float* m = model + 45 + off;
+      const float* xx = x + p;
+      float dot;
+      if (len >= 8) {
+        int q = 0;
+#if PBB_HAS_AVX2
+        __m256 acc = _mm256_setzero_ps();
+        for (; q + 8 <= len; q += 8)
+          acc = _mm256_fmadd_ps(_mm256_loadu_ps(m + q), _mm256_loadu_ps(xx + q), acc);
+        __m128 lo = _mm256_castps256_ps128(acc);
+        __m128 hi = _mm256_extractf128_ps(acc, 1);
+        __m128 s2 = _mm_add_ps(lo, hi);
+        s2 = _mm_hadd_ps(s2, s2);
+        s2 = _mm_hadd_ps(s2, s2);
+        dot = _mm_cvtss_f32(s2);
+#elif PBB_HAS_NEON
+        float32x4_t acc = vdupq_n_f32(0);
+        for (; q + 4 <= len; q += 4)
+          acc = vfmaq_f32(acc, vld1q_f32(m + q), vld1q_f32(xx + q));
+        float32x2_t s2 = vadd_f32(vget_low_f32(acc), vget_high_f32(acc));
+        s2 = vpadd_f32(s2, s2);
+        dot = vget_lane_f32(s2, 0);
+#else
+        dot = 0;
+#endif
+        for (; q < len; q++) dot += m[q] * xx[q];
+      } else {
+        dot = 0;
+        for (int q = 0; q < len; q++) dot += m[q] * xx[q];
+      }
+      s += xp * dot;
+    }
+    off += len;
+  }
+  return s;
+}
+
 // ===== score_full: 完整评分流水线 =====
 // 前置条件: name_obj 必须先调用 load_team() 和 load_prefix()
 //
@@ -556,17 +610,14 @@ inline ScoreResult score_full(const char* name, int name_len, Name& name_obj) {
   // 隐匿 (skill ID 34, 即 xp_x[42]) 频次加成: +20
   if (xp_x[42] > 0) xp_x[42] += 20;
 
-  // ---- Step 7: 多项式扩展 + 模型评分 ----
-  float xp_array[1034];
-  hanxu_Poly(xp_array, xp_x);
-
-  // XP 评分: bias + SIMD 点积
-  float score = MODEL[0] + simd_dot_f32(xp_array, &MODEL[1], 1034);
+  // ---- Step 7: 融合多项式展开 + 模型评分 (perf/fused-poly-score) ----
+  // 原: hanxu_Poly(xp_array, xp_x) + simd_dot_f32 两遍; 融合后消除 xp_array 中间数组
+  float score = simd_poly_score(xp_x, MODEL);
 
   // XD 评分: 仅当 XP >= 4300 (基本合格) 时计算
   float scoreQD = 0;
   if (score >= 4300) {
-    scoreQD = MODELQD[0] + simd_dot_f32(xp_array, &MODELQD[1], 1034);
+    scoreQD = simd_poly_score(xp_x, MODELQD);
   }
 
   result.xp = (int)score;
