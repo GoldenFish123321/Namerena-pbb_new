@@ -32,3 +32,23 @@ jobs:
       - name: Diff mode 2
         run: |
           diff <(sort out/ci-result-mode2) test-mode2-expect-result.txt
+
+  # 性能回归检查: GitHub runner 机器异构, 绝对速度不可比。
+  # 方案: 同一 runner 内编译 merge-base 基线引擎 + PR 引擎,
+  #       交替 A/B 基准 (bench/alt_test.py), 对比中位数提升,
+  #       低于阈值 (-5%) 判为回归。需要 fetch-depth: 0 计算 merge-base。
+  perf-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++ python3-venv
+
+      - name: Perf regression check (A/B vs merge-base)
+        run: |
+          python3 bench/ci_perf_check.py --pairs 4 --size 50000000 --threshold -5
