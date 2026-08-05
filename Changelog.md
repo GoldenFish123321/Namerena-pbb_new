@@ -4,18 +4,23 @@
 
 ### 性能
 
-- 进位增量编码替代除法 (`4414e1e`)：consume_seq 中仅首候选做除法，后续候选 memcpy + 进位增量，x86 +6.5%
-- SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
-- PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
-- V 值快检提前 (`26cc8c5`)：score_full 中 V*3<1140 提前返回跳过 8 属性提取，g++ 构建 +11.9%（icpx 编译器已自动优化）
-- NEON branchless filter + KSA __restrict 优化 (`a9c0a03`)：finish_load_name 标量 for→simd_filter_range_attr (vtbl1_u8)，load_name_pair/load_prefix __restrict+const locals，ARM Cortex-A55 **+26.4%**
-- 缓存中位数属性 `_p[8]` (`689b606`)：finish_load_name/loading_name 计算 V 值时保存 7 个 median + HP 到 Name::_p[8]，score_full 直接读取避免 7 次重复 median() + HP 求和
-- 惰性 ual_skills 计算 (`b10f5e6`)：finish_load_name 改用 simd_mul_add_filter (仅属性过滤)，ual_skills 延迟到 calc_skills 中按需计算。99.96% 名字 V<24 早退时跳过整个技能变换 SIMD 通路
-- 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
+> **本机基准说明**（Intel Core Ultra 7 255H，Arrow Lake，AVX2+VNNI，icpx `-xCORE-AVX2`）：
+> 100M 名字 / 2 线程 / 固定 P 核 8,9 / 交替 A/B 配对统计（取中位数）。
+> 基线 **5.150 M/s** → 优化后 **5.751 M/s**，本轮两项算法级优化累计 **+11.7%**（配对均值 +11.8%）。
+> 下列条目按提交时间**从新到旧**排列。
+
+- **共享前缀 KSA** (`15c35c6`)：连续 5 个候选名字共享 key 前缀区间，pass1 前 `sp_len` 次迭代对 5 条 RC4 链状态完全相同 → 只计算一次后广播到其余 4 链，省 `4×sp_len` 次交换；`load_name_quint` 内置自检测共享前缀、`sp_len=0` 时自动退化为原始行为（对随机枚举同样正确）。**U7 255H 单独 +5.5%**（5.43 vs 5.15 M/s，100M/2 线程）
+- **属性过滤器 SIMD 稳定压缩** (`4abf93c`)：AVX2 属性提取循环改用 `vpshufb` + `Compress8Table` 每 8 字节组一次性稳定压缩（先 `&63` 掩码再 shuffle），替代逐字节分支提取。**U7 255H 在共享前缀 KSA 基础上叠加 +3.6%**，两项合计 **+11.7%**（100M 交替 A/B，2 线程）
 - SIMD 过滤提前终止 (`2232e81`)：simd_mul_add_filter 收集到 max_len+1 个有效 name_base 值后立即 break，约在第 2~3 次 AVX2 迭代退出 (原始终 8 次)
+- 技能频次映射优化 (`0f900fc`)：score_full 中 35×16=560 次嵌套循环改为 16 次直接 skill[k]→freq 查表，消除分支和内层初始化
+- 惰性 ual_skills 计算 (`b10f5e6`)：finish_load_name 改用 simd_mul_add_filter (仅属性过滤)，ual_skills 延迟到 calc_skills 中按需计算。99.96% 名字 V<24 早退时跳过整个技能变换 SIMD 通路
+- 缓存中位数属性 `_p[8]` (`689b606`)：finish_load_name/loading_name 计算 V 值时保存 7 个 median + HP 到 Name::_p[8]，score_full 直接读取避免 7 次重复 median() + HP 求和
+- NEON branchless filter + KSA __restrict 优化 (`a9c0a03`)：finish_load_name 标量 for→simd_filter_range_attr (vtbl1_u8)，load_name_pair/load_prefix __restrict+const locals，ARM Cortex-A55 **+26.4%**
+- V 值快检提前 (`26cc8c5`)：score_full 中 V*3<1140 提前返回跳过 8 属性提取，g++ 构建 +11.9%（icpx 编译器已自动优化）
+- PAIR_WIDTH=5 五路交错 KSA (`a6ee0ed`)：Intel 12-14代 / Core Ultra / AMD Zen4+ 自动五路，Golden Cove +13.4%
+- SIMD ual 计算与 name_base 过滤融合 (`08607eb`)：消除 256B 中间数组 store/reload，Intel U7 255H +2.2%
+- 进位增量编码替代除法 (`4414e1e`)：consume_seq 中仅首候选做除法，后续候选 memcpy + 进位增量，x86 +6.5%
 - float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
-- 共享前缀 KSA (`15c35c6`)：连续 5 个名字共享 key 前缀区间，pass1 前 sp_len 次迭代对 5 条链完全相同 → 单链计算后广播到其余 4 链，省 4×sp_len 次交换；load_name_quint 内置自检测共享前缀并在 sp_len=0 时自动退化，Intel U7 255H **+5.5%**
-- 属性过滤器 SIMD 稳定压缩 (`4abf93c`)：AVX2 属性提取循环改用 vpshufb + Compress8Table 每 8 字节组一次性压缩（先 &63 掩码再 shuffle），替代逐字节分支提取，Intel U7 255H 叠加后总 **+11.7%**（100M 交替 A/B，2 线程）
 
 ### 构建与发布
 
