@@ -671,6 +671,80 @@ struct alignas(64) Name {
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
   }
+
+  // ===== load_name_quad_sp_aos(): 共享前缀四候选交错 KSA (AoS 直写版, 照 quint_sp) =====
+  // 原始思路 (quint_sp): 共享前缀单链算一次 + memcpy 广播到各候选 val,
+  // pass1/pass2 直接成员数组 swap (每迭代 2 load + 2 store), 无中转数组/无 scatter。
+  // 只省 swap、不增加内存端口操作 —— 在端口吞吐主导核 (Arrow Lake) 上有效。
+  // 前置: 4 候选在前 sp_len 个字节 (从 j_pre 起) 相同 (can_shared 保证)。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
+  void load_name_quad_sp_aos(const char *a, const char *b, const char *c, const char *d,
+                             int nlen, int vary_start, int sp_len,
+                             Name& ob, Name& oc, Name& od) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
+    // 1) 共享前缀单链 (S1)
+    u8_t S1[N];
+    memcpy(S1, prefix_loaded ? saved_val : val_base2, sizeof S1);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    const char* __restrict nm_a = a;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += nm_a[j_cont] + S1[i_cont];
+      { u8_t t = S1[i_cont]; S1[i_cont] = S1[s1]; S1[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    // 2) memcpy 广播到 4 链
+    memcpy(val, S1, sizeof S1);
+    memcpy(ob.val, S1, sizeof S1);
+    memcpy(oc.val, S1, sizeof S1);
+    memcpy(od.val, S1, sizeof S1);
+    const char* __restrict nm_b = b; const char* __restrict nm_c = c;
+    const char* __restrict nm_d = d;
+    u8_t* __restrict va = val; u8_t* __restrict vb = ob.val;
+    u8_t* __restrict vc = oc.val; u8_t* __restrict vd = od.val;
+    // 3) pass1 续跑 (4 链)
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    // 4) pass2 (4 链, 无共享)
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
+  }
 #else
   // ===== load_name(): 标量回退路径 =====
   // 无 AVX2 时的纯 C++ 实现。ual 计算通过手动展开循环 (每次 8 个)。

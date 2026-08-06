@@ -416,9 +416,15 @@ inline int engine_main(int argc,char**argv){
                 for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(c+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(c+epre+p*scl,0);}
                 memcpy(d+epre,c+epre,evar*scl);
                 for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(d+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(d+epre+p*scl,0);}
-                if(can_shared)
-                    na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
-                else
+                if (can_shared) {
+                    // perf/shared-prefix-ksa: AoS 直写版共享前缀 (照 quint_sp 思路),
+                    // sp_len=0 时退化为 shared_key
+                    int sp_len = (na.j_pre < vary_start) ? (vary_start - na.j_pre) : 0;
+                    if (sp_len > 0)
+                        na.load_name_quad_sp_aos(a,b,c,d,nlen,vary_start,sp_len,nb,nc,nd);
+                    else
+                        na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
+                } else
                     na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
                 process_one(a,nlen,score_full(a,nlen,na));
                 process_one(b,nlen,score_full(b,nlen,nb));
