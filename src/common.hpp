@@ -36,6 +36,22 @@
   #define PBB_HAS_NEON 0
 #endif
 
+// MSVC 兼容: 提供 GCC/Clang 扩展的等价物 (无行为差异)
+#if defined(_MSC_VER)
+  #ifndef __restrict__
+    #define __restrict__ __restrict
+  #endif
+  #ifndef __builtin_expect
+    #define __builtin_expect(expr, cond) (expr)
+  #endif
+  #include <intrin.h>
+  #ifndef __builtin_ctz
+    static inline int __builtin_ctz(unsigned x) {
+      unsigned long idx; _BitScanForward(&idx, x); return (int)idx;
+    }
+  #endif
+#endif
+
 // 是否存在任意 SIMD 后端
 #define PBB_HAS_SIMD (PBB_HAS_AVX2 || PBB_HAS_AVX512 || PBB_HAS_NEON)
 
