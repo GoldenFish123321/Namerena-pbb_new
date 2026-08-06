@@ -417,13 +417,18 @@ inline int engine_main(int argc,char**argv){
                 memcpy(d+epre,c+epre,evar*scl);
                 for(int p=evar-1;p>=0;p--){if(++dig[p]<(unsigned)clen){ENC(d+epre+p*scl,dig[p]);break;}dig[p]=0;ENC(d+epre+p*scl,0);}
                 if (can_shared) {
-                    // perf/shared-prefix-ksa: AoS 直写版共享前缀 (照 quint_sp 思路),
-                    // sp_len=0 时退化为 shared_key
+#ifdef PBB_QUAD_SP_AOS
+                    // SP-AoS 路径 (端口吞吐主导核, Arrow Lake 实测 +5.5%)
+                    // AoS 直写版共享前缀: 单链算共享段 + memcpy 广播 + 直接 swap, 无中转/scatter
                     int sp_len = (na.j_pre < vary_start) ? (vary_start - na.j_pre) : 0;
                     if (sp_len > 0)
                         na.load_name_quad_sp_aos(a,b,c,d,nlen,vary_start,sp_len,nb,nc,nd);
                     else
                         na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
+#else
+                    // SoA32 路径 (延迟主导核, 云主机实测 +6.9%)
+                    na.load_name_quad_shared_key(a,b,c,d,nlen,vary_start,nb,nc,nd);
+#endif
                 } else
                     na.load_name_quad(a,b,c,d,nlen,nb,nc,nd);
                 process_one(a,nlen,score_full(a,nlen,na));

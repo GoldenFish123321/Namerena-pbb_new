@@ -23,6 +23,7 @@
 - float 特征数组 + SIMD 点积 (`4df77c1`)：score_full 中 xp_x/xp_array/hanxu_Poly 改 float，点积换 `simd_dot_f32`（AVX2 2×8 FMA / NEON 2×4 FMA / 标量回退），icpx -xCORE-AVX2 **+12%**（g++ 自动向量化已覆盖，0% 差异）
 - KSA SoA 交错存储 + 32 位合并内存操作 (`a95a510`)：四候选 val 从 AoS（4 个独立数组）改为行交错 `val4[i][0..3]`，val[i] 的 load/store 由 4 条 1 字节合并为 1 条 32 位，KSA 每步 L1 内存操作 16→10.5，x86（3 线程, 1e8 区间, 严格交替 ×2）**+13.8%**，输出 17 条逐行一致
 - 融合多项式展开+模型点积 (`48a7e6b`)：hanxu_Poly（1034 次标量查表 + 写中间数组）与 simd_dot 融合为按行 SIMD（利用 POLY_TABLE 行分组），消除 xp_array 中间数组 store/reload + 稀疏 0 特征行跳过，x86（3 线程, 1e8 区间）**+3.1%**，与 SoA KSA 组合 **+17.9%**
+- 平台自适应 quad KSA 路径：端口吞吐主导核（Arrow Lake / Core Ultra）用 AoS 直写共享前缀 `quad_sp_aos`（共享段单链 + memcpy 广播，Arrow Lake 实测 **+5.5%**）；延迟主导核（老 x86）保持 SoA32 行交错（+6.9%）。`PBB_QUAD_PATH=soa32|spaos` 可覆盖自动检测
 
 ### 构建与发布
 

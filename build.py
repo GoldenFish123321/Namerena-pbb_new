@@ -728,6 +728,28 @@ def _detect_pair_width() -> int:
     return 4  # default safe value
 
 
+def _detect_quad_path() -> str:
+    """Detect PW4 quad KSA path: soa32 (延迟主导核) vs spaos (端口吞吐主导核)。
+
+    Arrow Lake (Core Ultra) 实测: AoS 直写共享前缀 (quad_sp_aos) +5.5%;
+    老 x86 延迟主导核: SoA32 (val4 行交错 + 32 位合并) +6.9%。
+    配置项: PBB_QUAD_PATH 环境变量覆盖 ("soa32"/"spaos")。
+    """
+    env = os.environ.get("PBB_QUAD_PATH", "").strip().lower()
+    if env in ("soa32", "spaos"):
+        print(f"[build] PBB_QUAD_PATH={env} (配置项覆盖自动检测)", file=sys.stderr)
+        return env
+    try:
+        with open("/proc/cpuinfo") as f:
+            info = f.read().lower()
+            # Core Ultra (Arrow Lake/Lunar Lake/Panther Lake): 端口吞吐主导 → SP-AoS
+            if "core ultra" in info:
+                return "spaos"
+    except Exception:
+        pass
+    return "soa32"  # 默认/保守: SoA32 (延迟主导核, CI runner 等)
+
+
 def _compile_engine(verbose=False):
     """Compile engine_main.cpp → pbb_engine. Tries compilers in priority order."""
     compilers = _find_compilers(verbose)
@@ -736,6 +758,7 @@ def _compile_engine(verbose=False):
         sys.exit(1)
 
     pair_width = _detect_pair_width()
+    quad_path = _detect_quad_path()
 
     os.makedirs(BUILD_DIR, exist_ok=True)
     src = os.path.join(BASE_DIR, "engine_main.cpp")
@@ -757,6 +780,9 @@ def _compile_engine(verbose=False):
 
         # Add PAIR_WIDTH based on CPU microarchitecture
         flags = flags + [f"-DPAIR_WIDTH={pair_width}"]
+        # Add quad KSA path (SP-AoS for 端口吞吐主导核, SoA32 otherwise)
+        if quad_path == "spaos":
+            flags = flags + ["-DPBB_QUAD_SP_AOS=1"]
 
         # PBB_CXXFLAGS 环境变量: 覆盖自动检测的 flags
         overrides = _cxxflags_override("engine", name, flags, simd_name, verbose)
@@ -764,7 +790,7 @@ def _compile_engine(verbose=False):
         cmd = _compile(name, overrides, is_msvc, src, out, extra_includes=includes)
         if verbose:
             print(f"[build] engine [{name}]: {' '.join(cmd)}", file=sys.stderr)
-        print(f"[build] engine: {name} ({simd_name}, PAIR_WIDTH={pair_width})", file=sys.stderr)
+        print(f"[build] engine: {name} ({simd_name}, PAIR_WIDTH={pair_width}, QUAD_PATH={quad_path})", file=sys.stderr)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             return
