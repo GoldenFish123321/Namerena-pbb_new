@@ -278,8 +278,11 @@ struct alignas(64) Name {
   // 顺序枚举时 4 候选只在最低位 scl 字节不同，其余字节完全一致。
   // vary_start = nlen - scl，对该范围外的字节只 load 一次广播给 4 条 KSA 链。
   // 前置条件: 4 候选无进位 (guard: L%clen+3<clen)，否则字节差异不止最低位。
-  void load_name_quad_shared_key(const char *a, const char *b, const char *c, const char *d,
-                                  int nlen, int vary_start, Name& ob, Name& oc, Name& od) {
+  // perf/shared-prefix-ksa: a/b/c/d 加 __restrict, 让编译器 CSE 广播段的 key load
+  // (原实现 4 条链各自 load key, 共享段实际 1 次 load 即可, 省 ~3×sp_len 次 L1 load)。
+  void load_name_quad_shared_key(const char* __restrict a, const char* __restrict b,
+                                 const char* __restrict c, const char* __restrict d,
+                                 int nlen, int vary_start, Name& ob, Name& oc, Name& od) {
     q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
     // ---- SoA 交错 KSA (perf/ksa-soa32) ----
     // val4[i][0..3] = 4 候选的 val[i] (行交错), 32 位合并 load/store 减少 L1 内存操作:
@@ -329,6 +332,86 @@ struct alignas(64) Name {
       if (j == nlen) j = -1;
     }
     // scatter 回 4 个 Name.val (finish_load_name / calc_skills 用 AoS)
+    for (int i = 0; i < 256; i++) {
+      val[i] = val4[i][0];
+      ob.val[i] = val4[i][1];
+      oc.val[i] = val4[i][2];
+      od.val[i] = val4[i][3];
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
+  }
+
+  // ===== load_name_quad_sp(): 共享前缀四候选交错 KSA (SoA 版, perf/shared-prefix-ksa) =====
+  // 原理: can_shared (4 候选仅最低位 scl 字节不同) 时, pass1 前 sp_len 步
+  // (共享 key 区间 [j_pre, vary_start-1]) 对 4 条链完全相同 (初始状态相同 + key 相同
+  // → swap 序列相同) → 单链算一次再广播, 省 3×sp_len 次交换。
+  // 续跑/pass2 用 SoA32 (val4 行交错 + 32 位合并内存操作), 与 load_name_quad_shared_key 同风格。
+  // 前置: 4 候选在前 sp_len 个字节 (从 j_pre 起) 相同 (can_shared 保证)。
+  // 参数: sp_len = 共享前缀迭代数 = vary_start - j_pre (调用方算好, 可为 0 退化为 shared_key)。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
+  void load_name_quad_sp(const char *a, const char *b, const char *c, const char *d,
+                         int nlen, int vary_start, int sp_len,
+                         Name& ob, Name& oc, Name& od) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
+    // 1) 共享前缀单链 (S1)
+    u8_t S1[N];
+    memcpy(S1, prefix_loaded ? saved_val : val_base2, sizeof S1);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += a[j_cont] + S1[i_cont];
+      { u8_t t = S1[i_cont]; S1[i_cont] = S1[s1]; S1[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    // 2) 广播到 val4 (SoA 行交错)
+    alignas(64) u8_t val4[256][4];
+    for (int i = 0; i < 256; i++) {
+      u8_t v = S1[i];
+      val4[i][0] = v; val4[i][1] = v; val4[i][2] = v; val4[i][3] = v;
+    }
+    const int kN = N;
+    // 3) pass1 续跑 (SoA32, 从 i_cont/j_cont)
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1;
+      for (int i = i_cont, j = j_cont; i < kN; i++, j++) {
+        uint32_t vi = *(const uint32_t*)val4[i];
+        u8_t via = (u8_t)(vi & 0xff), vib = (u8_t)((vi >> 8) & 0xff);
+        u8_t vic = (u8_t)((vi >> 16) & 0xff), vid = (u8_t)((vi >> 24) & 0xff);
+        if (j >= vary_start) {
+          sa += a[j] + via; sb += b[j] + vib; sc += c[j] + vic; sd += d[j] + vid;
+        } else {
+          u8_t kb = a[j];
+          sa += kb + via; sb += kb + vib; sc += kb + vic; sd += kb + vid;
+        }
+        u8_t ta = val4[sa][0], tb = val4[sb][1], tc = val4[sc][2], td = val4[sd][3];
+        *(uint32_t*)val4[i] = (uint32_t)ta | ((uint32_t)tb << 8) | ((uint32_t)tc << 16) | ((uint32_t)td << 24);
+        val4[sa][0] = via; val4[sb][1] = vib; val4[sc][2] = vic; val4[sd][3] = vid;
+        if (j == nlen) j = -1;
+      }
+    }
+    // 4) pass2 (SoA32, 无共享)
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0;
+      for (int i = 0, j = nlen; i < kN; i++, j++) {
+        uint32_t vi = *(const uint32_t*)val4[i];
+        u8_t via = (u8_t)(vi & 0xff), vib = (u8_t)((vi >> 8) & 0xff);
+        u8_t vic = (u8_t)((vi >> 16) & 0xff), vid = (u8_t)((vi >> 24) & 0xff);
+        if (j >= vary_start) {
+          sa += a[j] + via; sb += b[j] + vib; sc += c[j] + vic; sd += d[j] + vid;
+        } else {
+          u8_t kb = a[j];
+          sa += kb + via; sb += kb + vib; sc += kb + vic; sd += kb + vid;
+        }
+        u8_t ta = val4[sa][0], tb = val4[sb][1], tc = val4[sc][2], td = val4[sd][3];
+        *(uint32_t*)val4[i] = (uint32_t)ta | ((uint32_t)tb << 8) | ((uint32_t)tc << 16) | ((uint32_t)td << 24);
+        val4[sa][0] = via; val4[sb][1] = vib; val4[sc][2] = vic; val4[sd][3] = vid;
+        if (j == nlen) j = -1;
+      }
+    }
+    // 5) scatter 回 4 个 Name.val
     for (int i = 0; i < 256; i++) {
       val[i] = val4[i][0];
       ob.val[i] = val4[i][1];
@@ -587,6 +670,80 @@ struct alignas(64) Name {
       }
     }
     _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true; oe._ksa_done = true;
+  }
+
+  // ===== load_name_quad_sp_aos(): 共享前缀四候选交错 KSA (AoS 直写版, 照 quint_sp) =====
+  // 原始思路 (quint_sp): 共享前缀单链算一次 + memcpy 广播到各候选 val,
+  // pass1/pass2 直接成员数组 swap (每迭代 2 load + 2 store), 无中转数组/无 scatter。
+  // 只省 swap、不增加内存端口操作 —— 在端口吞吐主导核 (Arrow Lake) 上有效。
+  // 前置: 4 候选在前 sp_len 个字节 (从 j_pre 起) 相同 (can_shared 保证)。
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((always_inline)) inline
+#endif
+  void load_name_quad_sp_aos(const char *a, const char *b, const char *c, const char *d,
+                             int nlen, int vary_start, int sp_len,
+                             Name& ob, Name& oc, Name& od) {
+    q_len = -1; ob.q_len = -1; oc.q_len = -1; od.q_len = -1;
+    if (sp_len > N - i_pre) sp_len = N - i_pre;
+    // 1) 共享前缀单链 (S1)
+    u8_t S1[N];
+    memcpy(S1, prefix_loaded ? saved_val : val_base2, sizeof S1);
+    u8_t s1 = s_pre;
+    int i_cont = i_pre, j_cont = j_pre;
+    const char* __restrict nm_a = a;
+    for (int k = 0; k < sp_len; k++, i_cont++, j_cont++) {
+      s1 += nm_a[j_cont] + S1[i_cont];
+      { u8_t t = S1[i_cont]; S1[i_cont] = S1[s1]; S1[s1] = t; }
+      if (j_cont == nlen) j_cont = -1;
+    }
+    // 2) memcpy 广播到 4 链
+    memcpy(val, S1, sizeof S1);
+    memcpy(ob.val, S1, sizeof S1);
+    memcpy(oc.val, S1, sizeof S1);
+    memcpy(od.val, S1, sizeof S1);
+    const char* __restrict nm_b = b; const char* __restrict nm_c = c;
+    const char* __restrict nm_d = d;
+    u8_t* __restrict va = val; u8_t* __restrict vb = ob.val;
+    u8_t* __restrict vc = oc.val; u8_t* __restrict vd = od.val;
+    // 3) pass1 续跑 (4 链)
+    {
+      u8_t sa = s1, sb = s1, sc = s1, sd = s1;
+      for (int i = i_cont, j = j_cont; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    // 4) pass2 (4 链, 无共享)
+    {
+      u8_t sa = 0, sb = 0, sc = 0, sd = 0;
+      for (int i = 0, j = nlen; i < N; i++, j++) {
+        if (j >= vary_start) {
+          sa += nm_a[j] + va[i]; std::swap(va[i], va[sa]);
+          sb += nm_b[j] + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += nm_c[j] + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += nm_d[j] + vd[i]; std::swap(vd[i], vd[sd]);
+        } else {
+          u8_t kb = nm_a[j];
+          sa += kb + va[i]; std::swap(va[i], va[sa]);
+          sb += kb + vb[i]; std::swap(vb[i], vb[sb]);
+          sc += kb + vc[i]; std::swap(vc[i], vc[sc]);
+          sd += kb + vd[i]; std::swap(vd[i], vd[sd]);
+        }
+        if (j == nlen) j = -1;
+      }
+    }
+    _ksa_done = true; ob._ksa_done = true; oc._ksa_done = true; od._ksa_done = true;
   }
 #else
   // ===== load_name(): 标量回退路径 =====
